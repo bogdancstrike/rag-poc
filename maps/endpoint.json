@@ -184,6 +184,50 @@
         "module_name": "api.endpoints",
         "method_name": "dashboard_tasks_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_documents_enrich_field",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/documents/enrich/field",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "document_enrich_field_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_insights_stream",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/insights/stream",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "insights_stream_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_dashboard_tasks_restart",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/dashboard/tasks/restart",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "dashboard_task_restart_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_dashboard_tasks_clear",
+      "model_name": "Empty",
+      "request_method": ["DELETE"],
+      "api_url": "/v1/dashboard/tasks",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "dashboard_task_clear_handler"
+      }
     }
   ]
 }

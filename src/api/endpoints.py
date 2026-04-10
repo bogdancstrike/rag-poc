@@ -413,61 +413,330 @@ def documents_handler(app, operation, request, **kwargs):
             logger.error(f"[api] Error fetching documents: {e}")
             return {"error": str(e)}, 500
 
+def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
+    """Background worker: run full document enrichment and persist result.
+
+    Called via ThreadPoolExecutor so the HTTP thread never blocks on LLM calls.
+    """
+    from src.session.models import DocumentEnrichment, get_db
+    from src.rag.llm_client import get_llm
+    from src.rag.prompt_builder import PromptBuilder
+    from src.rag.insights_engine import InsightsEngine
+
+    # Mark as processing
+    try:
+        with get_db() as db:
+            row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+            if row:
+                row.status = "processing"
+                db.commit()
+    except Exception as e:
+        logger.error(f"[enrich] DB pre-update failed: {e}")
+        return
+
+    try:
+        builder = PromptBuilder()
+        messages, system = builder.build_enrichment_messages(text[:3000])
+        llm = get_llm()
+        raw = llm.complete_json(messages, system)
+        payload = InsightsEngine._parse_json(raw)
+        if not payload:
+            raise ValueError("Failed to parse enrichment JSON from LLM")
+
+        with get_db() as db:
+            row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+            if row:
+                row.status = "complete"
+                row.payload = payload
+                row.error = None
+                db.commit()
+                logger.info(f"[enrich] Complete: doc_id={doc_id}")
+    except Exception as e:
+        logger.error(f"[enrich] Failed doc_id={doc_id}: {e}", exc_info=True)
+        try:
+            with get_db() as db:
+                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                if row:
+                    row.status = "error"
+                    row.error = str(e)
+                    db.commit()
+        except Exception as db_err:
+            logger.error(f"[enrich] DB error-update failed: {db_err}")
+
+
 def document_enrichment_handler(app, operation, request, **kwargs):
-    """POST /v1/documents/enrich — enrich a single document (caching in Postgres)."""
+    """POST /v1/documents/enrich — start async enrichment or return cached result.
+
+    Body: { "datasource": str, "doc_id": str, "text": str, "force"?: bool }
+    Returns: DocumentEnrichment row dict.
+    - 200 if already complete (and force=False)
+    - 202 if pending/processing or just started
+    - 400 on bad input
+    """
     body = _json()
     datasource = body.get("datasource")
     doc_id = body.get("doc_id")
     text = body.get("text", "")
-    
+    force = bool(body.get("force", False))
+
     if not datasource or not doc_id or not text:
         return {"error": "datasource, doc_id, and text are required"}, 400
-        
+
     with tracer.start_as_current_span("api.documents.enrich") as span:
+        span.set_attribute("enrich.doc_id", doc_id)
+        span.set_attribute("enrich.datasource", datasource)
+        span.set_attribute("enrich.force", force)
+
         from src.session.models import DocumentEnrichment, get_db
-        from src.rag.llm_client import get_llm
-        from src.rag.prompt_builder import PromptBuilder
-        from src.rag.insights_engine import InsightsEngine
-        
-        # Check cache
+        from src.rag.insights_engine import _executor
+
         with get_db() as db:
             row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-            if row and row.status == "complete":
+
+            # Return cached complete result unless force-reload requested
+            if row and row.status == "complete" and not force:
+                span.set_attribute("enrich.cache_hit", True)
                 return row.to_dict(), 200
-            
+
+            # Return current in-progress state (don't double-submit)
+            if row and row.status in ("pending", "processing") and not force:
+                return row.to_dict(), 202
+
+            # Create or reset the row and trigger background work
+            if not row:
+                row = DocumentEnrichment(doc_id=doc_id, datasource=datasource, status="pending")
+                db.add(row)
+            else:
+                row.status = "pending"
+                row.error = None
+                if force:
+                    row.payload = None
+            db.commit()
+            result = row.to_dict()
+
+        _executor.submit(_run_enrichment_background, datasource, doc_id, text)
+        span.set_attribute("enrich.cache_hit", False)
+        return result, 202
+
+
+def document_enrich_field_handler(app, operation, request, **kwargs):
+    """POST /v1/documents/enrich/field — reload a single enrichment field.
+
+    Body: { "datasource": str, "doc_id": str, "text": str, "field": str }
+    Supported fields: sentiment, classification, entities, summary.
+    Returns the updated DocumentEnrichment row dict.
+    """
+    body = _json()
+    datasource = body.get("datasource")
+    doc_id = body.get("doc_id")
+    text = body.get("text", "")
+    field = body.get("field", "")
+
+    VALID_FIELDS = {"sentiment", "classification", "entities", "summary"}
+    if not datasource or not doc_id or not text or field not in VALID_FIELDS:
+        return {"error": f"datasource, doc_id, text, and field ({'/'.join(VALID_FIELDS)}) are required"}, 400
+
+    with tracer.start_as_current_span("api.documents.enrich.field") as span:
+        span.set_attribute("enrich.doc_id", doc_id)
+        span.set_attribute("enrich.field", field)
+
+        from src.session.models import DocumentEnrichment, get_db
+        from src.rag.insights_engine import _executor
+
+        def _run_field_enrichment():
+            from src.rag.llm_client import get_llm
+            from src.rag.prompt_builder import PromptBuilder
+            from src.rag.insights_engine import InsightsEngine
+
+            try:
+                builder = PromptBuilder()
+                messages, system = builder.build_field_enrichment_messages(text[:3000], field)
+                llm = get_llm()
+                raw = llm.complete_json(messages, system)
+                partial = InsightsEngine._parse_json(raw)
+                if not partial:
+                    raise ValueError(f"Failed to parse {field} JSON from LLM")
+
+                with get_db() as db:
+                    row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                    if not row:
+                        row = DocumentEnrichment(doc_id=doc_id, datasource=datasource, status="complete", payload={})
+                        db.add(row)
+                    existing = dict(row.payload or {})
+                    existing.update(partial)
+                    row.payload = existing
+                    row.status = "complete"
+                    row.error = None
+                    db.commit()
+                    logger.info(f"[enrich] Field '{field}' updated for doc_id={doc_id}")
+            except Exception as e:
+                logger.error(f"[enrich] Field '{field}' failed: {e}", exc_info=True)
+                try:
+                    with get_db() as db:
+                        row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                        if row:
+                            row.error = str(e)
+                            db.commit()
+                except Exception:
+                    pass
+
+        # Mark the field as refreshing (keep existing payload)
+        with get_db() as db:
+            row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
             if not row:
                 row = DocumentEnrichment(doc_id=doc_id, datasource=datasource, status="processing")
                 db.add(row)
-            else:
-                row.status = "processing"
-                row.error = None
             db.commit()
-            
+            result = row.to_dict()
+
+        _executor.submit(_run_field_enrichment)
+        return result, 202
+
+def insights_stream_handler(app, operation, request, **kwargs):
+    """GET /v1/insights/stream — SSE stream that pushes task-status events.
+
+    The client receives:
+      data: {"type": "state",       "tasks": {...},   "datasource": str}  — initial snapshot
+      data: {"type": "task_update", "insight_type": str, "task": {...}}   — per-task update
+      : heartbeat                                                          — every 25 s
+    """
+    datasource = flask_request.args.get("datasource", "default")
+
+    from src.rag.insights_engine import get_insights_engine, _event_bus
+
+    def generate():
+        engine = get_insights_engine()
+
+        # Send current state immediately so the client doesn't wait
+        current = engine._load_all_from_cache(datasource)
+        yield f'data: {json.dumps({"type": "state", "tasks": current, "datasource": datasource})}\n\n'
+
+        # Subscribe for future updates
+        q = _event_bus.subscribe(datasource)
         try:
-            builder = PromptBuilder()
-            messages, system = builder.build_enrichment_messages(text[:3000]) # Cap text to avoid context limits
-            llm = get_llm()
-            raw = llm.complete_json(messages, system)
-            
-            engine = InsightsEngine()
-            payload = engine._parse_json(raw)
-            if not payload:
-                raise ValueError("Failed to parse JSON from LLM")
-                
-            with get_db() as db:
-                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-                row.status = "complete"
-                row.payload = payload
-                db.commit()
-                return row.to_dict(), 200
-                
+            while True:
+                try:
+                    event = q.get(timeout=25)
+                    yield f'data: {json.dumps(event)}\n\n'
+                except Exception:
+                    # Timeout — send SSE keepalive comment
+                    yield ": heartbeat\n\n"
+        finally:
+            _event_bus.unsubscribe(datasource, q)
+
+    headers = {
+        **_cors_headers(),
+        "Cache-Control":     "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    return Response(stream_with_context(generate()), mimetype="text/event-stream", headers=headers)
+
+
+def dashboard_task_restart_handler(app, operation, request, **kwargs):
+    """POST /v1/dashboard/tasks/restart — restart an insights or enrichment task.
+
+    Body: {
+        "task_category": "insight" | "enrichment",
+        "datasource": str,
+        "task": str   -- insight_type (e.g., "summary") or doc_id for enrichments
+    }
+    """
+    body = _json()
+    category = body.get("task_category", "insight")
+    datasource = body.get("datasource")
+    task = body.get("task")
+
+    if not datasource or not task:
+        return {"error": "datasource and task are required"}, 400
+
+    with tracer.start_as_current_span("api.dashboard.tasks.restart") as span:
+        span.set_attribute("task.category", category)
+        span.set_attribute("task.datasource", datasource)
+        span.set_attribute("task.id", task)
+
+        try:
+            if category == "insight":
+                from src.rag.insights_engine import get_insights_engine, _executor
+                engine = get_insights_engine()
+                from src.rag.retriever import get_retriever
+                import hashlib
+
+                # Mark pending and run coordinator to re-sample + trigger
+                engine._set_task_status(datasource, task, "pending", "manual_restart", clear_data=True)
+                _executor.submit(engine._run_coordinator, datasource)
+                return {"status": "restarted", "task": task, "category": category}, 200
+
+            elif category == "enrichment":
+                # doc_id == task; fetch text from ES and re-run enrichment
+                from src.datasource.es_client import ESClient
+                from src.session.models import DocumentEnrichment, get_db
+                from src.rag.insights_engine import _executor
+
+                client = ESClient()
+                docs, _ = client.get_documents(index_name=datasource, offset=0, limit=1,
+                                               query=f"_id:{task}")
+                text = ""
+                if docs:
+                    text = docs[0].get("text", "")
+
+                if not text:
+                    return {"error": "Document text not found for enrichment restart"}, 404
+
+                with get_db() as db:
+                    row = db.query(DocumentEnrichment).filter_by(doc_id=task, datasource=datasource).first()
+                    if row:
+                        row.status = "pending"
+                        row.error = None
+                        row.payload = None
+                        db.commit()
+
+                _executor.submit(_run_enrichment_background, datasource, task, text)
+                return {"status": "restarted", "task": task, "category": category}, 200
+            else:
+                return {"error": f"Unknown task_category: {category}"}, 400
+
         except Exception as e:
+            logger.error(f"[api] Task restart failed: {e}", exc_info=True)
+            return {"error": str(e)}, 500
+
+
+def dashboard_task_clear_handler(app, operation, request, **kwargs):
+    """DELETE /v1/dashboard/tasks — clear (delete) a specific task record.
+
+    Query params: task_category, datasource, task (insight_type or doc_id)
+    """
+    category = flask_request.args.get("task_category", "insight")
+    datasource = flask_request.args.get("datasource")
+    task = flask_request.args.get("task")
+
+    if not datasource or not task:
+        return {"error": "datasource and task are required"}, 400
+
+    with tracer.start_as_current_span("api.dashboard.tasks.clear") as span:
+        span.set_attribute("task.category", category)
+        span.set_attribute("task.datasource", datasource)
+
+        try:
+            from src.session.models import InsightsCache, DocumentEnrichment, get_db
+
             with get_db() as db:
-                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-                row.status = "error"
-                row.error = str(e)
+                if category == "insight":
+                    db.query(InsightsCache).filter(
+                        InsightsCache.datasource == datasource,
+                        InsightsCache.insight_type == task,
+                    ).delete()
+                elif category == "enrichment":
+                    db.query(DocumentEnrichment).filter(
+                        DocumentEnrichment.datasource == datasource,
+                        DocumentEnrichment.doc_id == task,
+                    ).delete()
                 db.commit()
-                return row.to_dict(), 500
+
+            return {"status": "deleted", "task": task, "category": category}, 200
+        except Exception as e:
+            logger.error(f"[api] Task clear failed: {e}", exc_info=True)
+            return {"error": str(e)}, 500
+
 
 def task_refresh_handler(app, operation, request, **kwargs):
     """POST /v1/insights/task/refresh — refresh a single failed task."""

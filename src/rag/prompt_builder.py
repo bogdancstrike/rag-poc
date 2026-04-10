@@ -44,16 +44,35 @@ FORMAT RULES:
 3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
 """
 
-INSIGHTS_GRAPH_PROMPT = """Detect relationships and connections between entities in the documents.
+INSIGHTS_GRAPH_PROMPT = """Detect relationships between named entities (people, organizations, locations, tools, events) in the documents.
+Build a concise knowledge graph — do NOT use document IDs as node IDs.
+
 FORMAT RULES:
-1. Output ONLY valid JSON.
-2. The JSON must have EXACTLY this structure:
+1. Output ONLY valid JSON, no markdown, no comments.
+2. Use the entity name itself as the node "id" (e.g., "LockBit", "SVR", "Ukraine").
+3. Limit to 10-15 nodes and at most 20 edges.
+4. The JSON must have EXACTLY this structure:
 {
-  "nodes": [{"id": "string", "label": "string", "type": "string"}],
-  "edges": [{"source": "string", "target": "string", "relationship": "string", "weight": float}]
+  "nodes": [{"id": "EntityName", "label": "EntityName", "type": "person|org|location|tool|event"}],
+  "edges": [{"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}]
 }
-3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
+5. "source" and "target" in edges MUST match node "id" values exactly.
+6. Do NOT include any other top-level keys.
 """
+
+# ── Per-field enrichment prompts ───────────────────────────────────────────────
+
+ENRICH_SENTIMENT_PROMPT = """Analyze the sentiment of the document.
+Output ONLY valid JSON: {"sentiment": "positive|negative|neutral|mixed|hostile"}"""
+
+ENRICH_CLASSIFICATION_PROMPT = """Classify the document into an intelligence category.
+Output ONLY valid JSON: {"classification": "string (e.g., Cyber Threat, Geopolitics, Financial Crime, Intelligence Report, Disinformation)"}"""
+
+ENRICH_ENTITIES_PROMPT = """Extract named entities (people, organizations, locations, tools) from the document.
+Output ONLY valid JSON: {"entities": [{"name": "string", "type": "person|org|location|tool"}]}"""
+
+ENRICH_SUMMARY_PROMPT = """Write a concise 1-2 sentence intelligence summary of the document.
+Output ONLY valid JSON: {"summary": "string"}"""
 
 
 INSIGHTS_ENRICH_PROMPT = """You are an expert intelligence analyst. 
@@ -75,10 +94,34 @@ class PromptBuilder:
     """Assembles LLM-ready messages from retrieved chunks + conversation history."""
 
     def build_enrichment_messages(self, document_text: str) -> tuple[list[dict], str]:
-        """Build the messages list for single document enrichment."""
+        """Build the messages list for full document enrichment (all fields at once)."""
         messages = [{
             "role": "user",
-            "content": f"Document:\n{document_text}\n\n---\nAnalyze the above document and output structured JSON.\n\nREQUIRED SCHEMA (You MUST output ONLY valid JSON matching this exact structure):\n{INSIGHTS_ENRICH_PROMPT}",
+            "content": (
+                f"Document:\n{document_text}\n\n---\n"
+                "Analyze the above document and output structured JSON.\n\n"
+                f"REQUIRED SCHEMA (output ONLY this JSON, no extra text):\n{INSIGHTS_ENRICH_PROMPT}"
+            ),
+        }]
+        return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
+
+    def build_field_enrichment_messages(self, document_text: str, field: str) -> tuple[list[dict], str]:
+        """Build messages for a single enrichment field (sentiment / classification / entities / summary).
+
+        Args:
+            document_text: The document content to analyze.
+            field: One of 'sentiment', 'classification', 'entities', 'summary'.
+        """
+        field_prompt_map = {
+            "sentiment":      ENRICH_SENTIMENT_PROMPT,
+            "classification": ENRICH_CLASSIFICATION_PROMPT,
+            "entities":       ENRICH_ENTITIES_PROMPT,
+            "summary":        ENRICH_SUMMARY_PROMPT,
+        }
+        prompt = field_prompt_map.get(field, INSIGHTS_ENRICH_PROMPT)
+        messages = [{
+            "role": "user",
+            "content": f"Document:\n{document_text}\n\n---\n{prompt}",
         }]
         return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
 

@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
-import { ConfigProvider, Layout, theme as antTheme, Tabs, Typography, Space, Button, Tooltip, Menu, Spin, Alert, Switch } from 'antd'
 import {
-  BulbOutlined, MessageOutlined, BgColorsOutlined, DatabaseOutlined, RobotOutlined,
-  TableOutlined, DashboardOutlined
+  ConfigProvider, Layout, theme as antTheme, Tabs, Typography, Space,
+  Button, Tooltip, Menu, Spin, Alert, Switch,
+} from 'antd'
+import {
+  BulbOutlined, MessageOutlined, BgColorsOutlined, DatabaseOutlined,
+  RobotOutlined, TableOutlined, DashboardOutlined,
 } from '@ant-design/icons'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useThemeStore } from '@/stores/themeStore'
@@ -11,6 +14,7 @@ import { InsightsPanel } from '@/components/insights/InsightsPanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { DataTable } from '@/components/explore/DataTable'
 import { OverviewDashboard } from '@/components/dashboard/OverviewDashboard'
+import { TaskDetailPanel } from '@/components/dashboard/TaskDetailPanel'
 import { useIndices } from '@/hooks/useExplore'
 import { Document } from '@/api/explore'
 
@@ -29,12 +33,20 @@ interface RagModuleProps {
   height?: string | number
 }
 
+/** Lightweight state-based router state. */
+type PageState =
+  | { page: 'main' }
+  | { page: 'task_detail'; task: any; category: 'insight' | 'enrichment' }
+
 function RagModuleInner({ height = '100vh' }: RagModuleProps) {
   const { token } = antTheme.useToken()
   const { mode, toggle } = useThemeStore()
 
   const { data: indices, isLoading: isLoadingIndices, error: indicesError } = useIndices()
   const [datasource, setDatasource] = useState<string>('__dashboard__')
+  const [pageState, setPageState] = useState<PageState>({ page: 'main' })
+
+  // Per-datasource AI mode toggle, persisted in localStorage
   const [aiModes, setAiModes] = useState<Record<string, boolean>>(() => {
     try {
       const saved = localStorage.getItem('qsint_ai_modes')
@@ -45,16 +57,16 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
   })
   const aiMode = aiModes[datasource] || false
   const setAiMode = (checked: boolean) => {
-    setAiModes(prev => {
+    setAiModes((prev) => {
       const next = { ...prev, [datasource]: checked }
       try { localStorage.setItem('qsint_ai_modes', JSON.stringify(next)) } catch {}
       return next
     })
   }
 
-  const [activeTab, setActiveTab]       = useState<'insights' | 'chat'>('insights')
+  const [activeTab, setActiveTab] = useState<'insights' | 'chat'>('insights')
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
-  const setStorePendingQuery            = useSessionStore((s) => s.setPendingQuery)
+  const setStorePendingQuery = useSessionStore((s) => s.setPendingQuery)
 
   const handleAskAbout = (question: string) => {
     setPendingQuery(question)
@@ -63,30 +75,48 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
     setAiMode(true)
   }
 
+  /** Called when user sends docs/insights to RAG Chat from other panels. */
   const handleSendToRag = (docs: any[]) => {
-    const context = docs.map(d => `Title: ${d.title}\nContent: ${d.text}`).join('\n\n')
-    const query = `Please analyze the following ${docs.length} selected documents:\n\n${context}`
+    const context = docs.map((d) => `Title: ${d.title || '(untitled)'}\nContent: ${d.text || ''}`).join('\n\n')
+    const query = `Please analyze the following ${docs.length} document(s):\n\n${context}`
     setPendingQuery(query)
     setStorePendingQuery(query)
     setActiveTab('chat')
     setAiMode(true)
   }
 
+  const heightStr = typeof height === 'number' ? `${height}px` : height
+  const contentHeight = `calc(${heightStr} - 108px)` // header (48) + tab bar (60)
+
   const aiTabItems = [
     {
-      key:   'insights',
-      label: <Space><BulbOutlined />Intelligence Report</Space>,
+      key: 'insights',
+      label: (
+        <Space>
+          <BulbOutlined />
+          Intelligence Report
+        </Space>
+      ),
       children: (
-        <div style={{ overflowY: 'auto', height: `calc(${typeof height === 'number' ? height + 'px' : height} - 108px)`, padding: '16px' }}>
-          <InsightsPanel datasource={datasource} onAskAbout={handleAskAbout} />
+        <div style={{ overflowY: 'auto', height: contentHeight, padding: '16px' }}>
+          <InsightsPanel
+            datasource={datasource}
+            onAskAbout={handleAskAbout}
+            onSendToRag={handleSendToRag}
+          />
         </div>
       ),
     },
     {
-      key:   'chat',
-      label: <Space><MessageOutlined />RAG Chat</Space>,
+      key: 'chat',
+      label: (
+        <Space>
+          <MessageOutlined />
+          RAG Chat
+        </Space>
+      ),
       children: (
-        <div style={{ height: `calc(${typeof height === 'number' ? height + 'px' : height} - 108px)` }}>
+        <div style={{ height: contentHeight }}>
           <ChatPanel
             datasource={datasource}
             prefillQuery={activeTab === 'chat' ? pendingQuery : null}
@@ -101,69 +131,91 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
     {
       key: '__dashboard__',
       icon: <DashboardOutlined />,
-      label: 'Platform Overview'
+      label: 'Platform Overview',
     },
     { type: 'divider' },
-    ...(indices || []).map(idx => ({
+    ...(indices || []).map((idx) => ({
       key: idx,
       icon: <DatabaseOutlined />,
-      label: idx
-    }))
+      label: idx,
+    })),
   ]
+
+  /** Navigate back from a task detail page to the platform overview. */
+  const handleTaskBack = () => {
+    setPageState({ page: 'main' })
+  }
+
+  /** Navigate to a task detail page. */
+  const handleSelectTask = (task: any, category: 'insight' | 'enrichment') => {
+    if (!task) return
+    setPageState({ page: 'task_detail', task, category })
+  }
+
+  // When datasource changes, reset page state
+  useEffect(() => {
+    setPageState({ page: 'main' })
+  }, [datasource])
 
   return (
     <Layout style={{ height, background: token.colorBgLayout }}>
       {/* Top bar */}
       <Header
         style={{
-          padding:     '0 16px',
-          height:      48,
-          lineHeight:  '48px',
-          background:  token.colorBgContainer,
-          borderBottom:`1px solid ${token.colorBorderSecondary}`,
-          display:     'flex',
-          alignItems:  'center',
+          padding: '0 16px',
+          height: 48,
+          lineHeight: '48px',
+          background: token.colorBgContainer,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          display: 'flex',
+          alignItems: 'center',
           justifyContent: 'space-between',
-          flexShrink:  0,
+          flexShrink: 0,
         }}
       >
         <Space>
           <BulbOutlined style={{ color: token.colorPrimary }} />
           <Text strong style={{ fontSize: 14 }}>QSINT RAG</Text>
           <Text style={{ fontSize: 11, color: token.colorTextDescription, marginLeft: 4 }}>
-            Multi-Index Explorer
+            Intelligence Platform
           </Text>
         </Space>
         <Space size={16}>
           {datasource && datasource !== '__dashboard__' && (
             <Space>
               <Text strong style={{ fontSize: 12 }}>AI Mode</Text>
-              <Switch 
-                checkedChildren={<RobotOutlined />} 
+              <Switch
+                checkedChildren={<RobotOutlined />}
                 unCheckedChildren={<TableOutlined />}
-                checked={aiMode} 
-                onChange={setAiMode} 
+                checked={aiMode}
+                onChange={setAiMode}
               />
             </Space>
           )}
           <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
-            <Button
-              type="text"
-              size="small"
-              icon={<BgColorsOutlined />}
-              onClick={toggle}
-            />
+            <Button type="text" size="small" icon={<BgColorsOutlined />} onClick={toggle} />
           </Tooltip>
         </Space>
       </Header>
 
       <Layout>
-        <Sider width={250} style={{ background: token.colorBgContainer, borderRight: `1px solid ${token.colorBorderSecondary}` }}>
-          <div style={{ padding: '12px 16px' }}>
-            <Text type="secondary" strong style={{ fontSize: 11 }}>AVAILABLE INDICES</Text>
+        {/* Sidebar */}
+        <Sider
+          width={240}
+          style={{
+            background: token.colorBgContainer,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+          }}
+        >
+          <div style={{ padding: '12px 16px 4px' }}>
+            <Text type="secondary" strong style={{ fontSize: 11 }}>
+              AVAILABLE INDICES
+            </Text>
           </div>
           {isLoadingIndices ? (
-            <div style={{ padding: 16, textAlign: 'center' }}><Spin /></div>
+            <div style={{ padding: 16, textAlign: 'center' }}>
+              <Spin />
+            </div>
           ) : indicesError ? (
             <Alert type="error" message="Failed to load indices" style={{ margin: 8 }} />
           ) : (
@@ -176,15 +228,32 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
             />
           )}
         </Sider>
-        
-        <Content style={{ position: 'relative' }}>
-          {!datasource ? (
-            <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
+
+        {/* Main content area */}
+        <Content style={{ position: 'relative', overflow: 'hidden' }}>
+          {/* Task detail page */}
+          {pageState.page === 'task_detail' ? (
+            <div style={{ height: '100%', overflowY: 'auto' }}>
+              <TaskDetailPanel
+                task={pageState.task}
+                category={pageState.category}
+                onBack={handleTaskBack}
+              />
+            </div>
+          ) : !datasource ? (
+            <div
+              style={{
+                display: 'flex',
+                height: '100%',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
               <Text type="secondary">Select an index from the sidebar to explore data.</Text>
             </div>
           ) : datasource === '__dashboard__' ? (
             <div style={{ height: '100%', overflowY: 'auto' }}>
-              <OverviewDashboard />
+              <OverviewDashboard onSelectTask={handleSelectTask} />
             </div>
           ) : aiMode ? (
             <Tabs
@@ -193,16 +262,15 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
               items={aiTabItems}
               style={{ height: '100%' }}
               tabBarStyle={{
-                margin:  0,
+                margin: 0,
                 padding: '0 16px',
                 background: token.colorBgContainer,
                 borderBottom: `1px solid ${token.colorBorderSecondary}`,
               }}
-              tabBarExtraContent={null}
             />
           ) : (
             <div style={{ height: '100%', padding: '16px' }}>
-               <DataTable datasource={datasource} onSendToRag={handleSendToRag} />
+              <DataTable datasource={datasource} onSendToRag={handleSendToRag} />
             </div>
           )}
         </Content>
@@ -213,30 +281,36 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
 
 export function RagModule(props: RagModuleProps) {
   const { mode } = useThemeStore()
-  const isDark   = (props.theme ?? mode) === 'dark'
+  const isDark = (props.theme ?? mode) === 'dark'
 
   return (
     <ConfigProvider
       theme={{
         algorithm: isDark ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
         token: {
-          colorPrimary:      '#1890ff',
-          borderRadius:      4,
-          fontFamily:        '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-          colorBgLayout:     isDark ? '#141414' : '#f0f2f5',
-          fontSize:          14,
-          colorTextHeading:  isDark ? '#d9d9d9' : '#1f1f1f',
-          colorTextSecondary:isDark ? '#8c8c8c' : '#595959',
+          colorPrimary: '#1890ff',
+          borderRadius: 6,
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+          colorBgLayout: isDark ? '#141414' : '#f0f2f5',
+          fontSize: 14,
+          colorTextHeading: isDark ? '#d9d9d9' : '#1f1f1f',
+          colorTextSecondary: isDark ? '#8c8c8c' : '#595959',
         },
         components: {
           Layout: {
             headerBg: isDark ? '#1f1f1f' : '#ffffff',
-            siderBg:  isDark ? '#1f1f1f' : '#ffffff',
+            siderBg: isDark ? '#1f1f1f' : '#ffffff',
           },
           Menu: {
-            itemSelectedBg:    isDark ? '#111b26' : '#e6f7ff',
+            itemSelectedBg: isDark ? '#111b26' : '#e6f7ff',
             itemSelectedColor: '#1890ff',
-            itemHeight:        36,
+            itemHeight: 36,
+          },
+          Card: {
+            boxShadowTertiary: isDark
+              ? '0 1px 4px rgba(0,0,0,0.3)'
+              : '0 1px 4px rgba(0,0,0,0.06)',
           },
         },
       }}

@@ -1,20 +1,23 @@
 import {
   Row, Col, Card, Spin, Alert, Button, Tag, Typography, Space, Tooltip,
-  Divider, theme, Empty, Progress, Table
+  Divider, theme, Table, Tabs,
 } from 'antd'
 import {
-  ReloadOutlined, InfoCircleOutlined, FireOutlined, RiseOutlined,
-  TeamOutlined, WarningOutlined, ClockCircleOutlined, SyncOutlined,
-  BarChartOutlined, NodeIndexOutlined, DeleteOutlined
+  ReloadOutlined, FireOutlined, RiseOutlined, TeamOutlined, WarningOutlined,
+  ClockCircleOutlined, SyncOutlined, BarChartOutlined, NodeIndexOutlined,
+  DeleteOutlined, SendOutlined, TableOutlined, BulbOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { useInsights, useRefreshInsights, useDeleteInsights, useRefreshTask } from '@/hooks/useInsights'
 import { TopicBubbleChart } from './TopicBubbleChart'
 import { TrendAreaChart } from './TrendAreaChart'
 import { EntityBarChart } from './EntityBarChart'
 import { NarrativeCard } from './NarrativeCard'
+import { DataTable } from '@/components/explore/DataTable'
 
+dayjs.extend(utc)
 dayjs.extend(relativeTime)
 
 const { Title, Text } = Typography
@@ -29,12 +32,17 @@ const SENTIMENT_COLOR: Record<string, string> = {
 interface Props {
   datasource?: string
   onAskAbout: (question: string) => void
+  /** Called when the user clicks "Send to RAG" from the insights panel. */
+  onSendToRag?: (docs: any[]) => void
 }
 
 /**
- * InsightsPanel — Displays background task results and progress.
+ * InsightsPanel — Intelligence Report + Data Table tabs for a datasource.
+ *
+ * Shows background AI task results (summary, NER, graph, stats) and
+ * a raw data table. Provides "Ask about this" and "Send to RAG" actions.
  */
-export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
+export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag }: Props) {
   const { token } = theme.useToken()
   const { data: insights, isLoading, error } = useInsights(datasource)
   const refreshMut = useRefreshInsights(datasource)
@@ -70,7 +78,42 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
   const statsTask   = tasks.stats || { status: 'pending' }
 
   const isProcessing = meta?.is_processing || Object.values(tasks).some((t: any) => t.status === 'processing' || t.status === 'pending')
-  const generatedAt = summaryTask.generated_at ? dayjs(summaryTask.generated_at).fromNow() : '—'
+  const generatedAt = summaryTask.generated_at
+    ? dayjs.utc(summaryTask.generated_at).local().fromNow()
+    : '—'
+
+  /** Compose an intelligence summary context and send it to the RAG chat. */
+  const handleSendInsightsToRag = () => {
+    if (!onSendToRag) return
+    const parts: string[] = []
+    if (summaryTask.payload?.hot_topics?.length) {
+      parts.push(
+        'Hot Topics:\n' +
+          summaryTask.payload.hot_topics
+            .map((t: any) => `- ${t.topic}: ${t.summary}`)
+            .join('\n'),
+      )
+    }
+    if (nerTask.payload?.entities?.length) {
+      parts.push(
+        'Identified Entities:\n' +
+          nerTask.payload.entities
+            .slice(0, 10)
+            .map((e: any) => `- ${e.name} (${e.type})`)
+            .join('\n'),
+      )
+    }
+    if (summaryTask.payload?.narratives?.length) {
+      parts.push(
+        'Narratives:\n' +
+          summaryTask.payload.narratives
+            .map((n: any) => `- ${n.title}: ${n.description}`)
+            .join('\n'),
+      )
+    }
+    const context = parts.join('\n\n')
+    onSendToRag([{ title: 'Intelligence Report', text: context }])
+  }
 
   const renderTaskHeader = (title: string, task: any, icon: any, taskKey: string, type: 'ai' | 'static' = 'ai') => (
     <Row justify="space-between" align="middle" style={{ width: '100%' }}>
@@ -116,7 +159,8 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
     { title: 'Count', dataIndex: 'value', key: 'value', width: 80, align: 'right' as const },
   ]
 
-  return (
+  /** The full Intelligence Report tab content. */
+  const reportTabContent = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
       {/* Header bar */}
@@ -135,6 +179,18 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
             <Text style={{ fontSize: 11, color: token.colorTextDescription }}>
               <ClockCircleOutlined /> {generatedAt}
             </Text>
+            {onSendToRag && (
+              <Tooltip title="Send intelligence summary to RAG Chat">
+                <Button
+                  size="small"
+                  icon={<SendOutlined />}
+                  onClick={handleSendInsightsToRag}
+                  disabled={!summaryTask.payload && !nerTask.payload}
+                >
+                  Send to RAG
+                </Button>
+              </Tooltip>
+            )}
             <Tooltip title="Delete cached insights">
               <Button
                 size="small"
@@ -275,5 +331,40 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
         ) : renderLoadingState()}
       </Card>
     </div>
+  )
+
+  return (
+    <Tabs
+      defaultActiveKey="report"
+      size="small"
+      items={[
+        {
+          key: 'report',
+          label: (
+            <Space>
+              <BulbOutlined />
+              Intelligence Report
+              {isProcessing && <SyncOutlined spin style={{ fontSize: 10 }} />}
+            </Space>
+          ),
+          children: reportTabContent,
+        },
+        {
+          key: 'data',
+          label: (
+            <Space>
+              <TableOutlined />
+              Raw Data
+            </Space>
+          ),
+          children: (
+            <div style={{ height: 'calc(100vh - 180px)' }}>
+              <DataTable datasource={datasource} onSendToRag={onSendToRag} />
+            </div>
+          ),
+        },
+      ]}
+      tabBarStyle={{ marginBottom: 0, paddingBottom: 8 }}
+    />
   )
 }

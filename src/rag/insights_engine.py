@@ -7,14 +7,17 @@ Samples the corpus and triggers multiple background tasks:
 4. Data Statistics (Chart data from Elasticsearch)
 
 Uses ThreadPoolExecutor for lightweight background processing.
+All HTTP-facing methods return immediately — heavy work runs in background.
+SSE subscribers receive push notifications as tasks complete.
 """
 import hashlib
 import json
+import queue
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set
 
 from framework.commons.logger import logger
 from framework.tracing import get_tracer
@@ -26,9 +29,51 @@ from src.rag.prompt_builder import PromptBuilder
 
 tracer = get_tracer()
 
-# Background worker pool
-_executor = ThreadPoolExecutor(max_workers=4)
+# Background worker pool (max 6 workers: stats + 3 AI tasks + enrichment slots)
+_executor = ThreadPoolExecutor(max_workers=6)
 _lock = threading.Lock()
+
+
+# ── SSE Event Bus ──────────────────────────────────────────────────────────────
+
+class InsightsEventBus:
+    """Thread-safe pub/sub for insights task status events.
+
+    Each datasource has a list of subscriber queues. When a task changes status,
+    `publish()` puts an event into every queue so SSE streams can forward it.
+    """
+
+    def __init__(self):
+        self._subscribers: Dict[str, List[queue.Queue]] = {}
+        self._lock = threading.Lock()
+
+    def subscribe(self, datasource: str) -> queue.Queue:
+        """Register a new SSE client for a datasource. Returns a Queue to read from."""
+        q: queue.Queue = queue.Queue()
+        with self._lock:
+            self._subscribers.setdefault(datasource, []).append(q)
+        return q
+
+    def unsubscribe(self, datasource: str, q: queue.Queue) -> None:
+        """Remove a subscriber when the SSE connection closes."""
+        with self._lock:
+            subs = self._subscribers.get(datasource, [])
+            if q in subs:
+                subs.remove(q)
+
+    def publish(self, datasource: str, event: dict) -> None:
+        """Broadcast an event to all subscribers of a datasource."""
+        with self._lock:
+            subs = list(self._subscribers.get(datasource, []))
+        for q in subs:
+            try:
+                q.put_nowait(event)
+            except queue.Full:
+                pass  # Slow consumer — drop event rather than block
+
+
+# Singleton event bus used by all SSE endpoints
+_event_bus = InsightsEventBus()
 
 
 class InsightsEngine:
@@ -41,56 +86,54 @@ class InsightsEngine:
 
     def get_insights(self, datasource: str = "default", force_refresh: bool = False) -> dict:
         """Return currently available insights and trigger background updates if needed.
-        
-        This call is non-blocking. If tasks are pending, it returns current state.
+
+        This method is fully non-blocking — it returns immediately with the current
+        DB state. Heavy work (Elasticsearch sample fetch + LLM calls) runs in background
+        threads. The frontend polls or subscribes via SSE to receive updates.
         """
         with tracer.start_as_current_span("insights.get_all") as span:
             span.set_attribute("insights.datasource", datasource)
-            
-            # 1. Load current state from DB first
+
+            # 1. Load current state from DB (fast Postgres read)
             current_insights = self._load_all_from_cache(datasource)
-            
-            # 2. Check if we have active tasks in flight (less than 10 mins old)
+
+            # 2. Check whether tasks are already in flight (<10 min old)
             now = datetime.now(timezone.utc)
             is_processing = False
             for t in current_insights.values():
                 if t.get("status") in ("pending", "processing"):
                     gen_at = self._parse_iso_utc(t.get("generated_at"))
-                    if gen_at and (now - gen_at).total_seconds() < 600: # 10 mins timeout for "stuck" tasks
+                    if gen_at and (now - gen_at).total_seconds() < 600:
                         is_processing = True
                         break
-            
-            # 3. Decision logic: do we need to start a fresh generation?
+
+            # 3. Determine whether a refresh is needed
             needs_refresh = force_refresh
-            
             if not needs_refresh and not is_processing:
                 if not current_insights:
                     needs_refresh = True
                 else:
-                    # Check TTL on summary (primary anchor)
                     summary = current_insights.get("summary")
                     if summary:
                         gen_at = self._parse_iso_utc(summary.get("generated_at"))
                         if gen_at:
                             age = (now - gen_at).total_seconds()
                             if age > Config.INSIGHTS_CACHE_TTL:
-                                logger.info(f"[insights] TTL expired ({age:.0f}s)")
+                                logger.info(f"[insights] TTL expired ({age:.0f}s) for {datasource}")
                                 needs_refresh = True
                         else:
                             needs_refresh = True
+                    else:
+                        needs_refresh = True
 
             if needs_refresh:
-                logger.info(f"[insights] Triggering fresh refresh for {datasource} (forced={force_refresh})")
-                retriever = get_retriever()
-                sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
-                if not sample:
-                    return self._empty_response(datasource, "No documents")
-
-                doc_ids = sorted([str(d.get("id")) for d in sample])
-                sample_hash = hashlib.sha256(",".join(doc_ids).encode()).hexdigest()
-                
-                self._trigger_tasks(datasource, sample, sample_hash)
-                # Re-load to get the "pending" statuses
+                logger.info(f"[insights] Scheduling coordinator for {datasource} (forced={force_refresh})")
+                # Immediately mark tasks as pending so the frontend sees activity
+                for ttype in ["summary", "ner", "graph", "stats"]:
+                    self._set_task_status(datasource, ttype, "pending", "coordinator_scheduled",
+                                          clear_data=force_refresh)
+                # Run the heavy coordinator (ES sample fetch + task dispatch) in background
+                _executor.submit(self._run_coordinator, datasource)
                 current_insights = self._load_all_from_cache(datasource)
                 span.set_attribute("insights.refresh_triggered", True)
             else:
@@ -99,10 +142,10 @@ class InsightsEngine:
             return {
                 "tasks": current_insights,
                 "_meta": {
-                    "datasource": datasource,
-                    "is_processing": is_processing,
-                    "refresh_triggered": needs_refresh
-                }
+                    "datasource":        datasource,
+                    "is_processing":     is_processing or needs_refresh,
+                    "refresh_triggered": needs_refresh,
+                },
             }
 
     def invalidate(self, datasource: str = "default") -> None:
@@ -114,8 +157,33 @@ class InsightsEngine:
 
     # ── Task Orchestration ──────────────────────────────────────────────────────
 
+    def _run_coordinator(self, datasource: str) -> None:
+        """Background coordinator: fetch the ES sample then dispatch AI tasks.
+
+        Called non-blocking from get_insights(). This is the method that does the
+        expensive Elasticsearch call so the HTTP thread never blocks on it.
+        """
+        try:
+            retriever = get_retriever()
+            sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
+            if not sample:
+                logger.warning(f"[insights] Coordinator: no documents for {datasource}")
+                for ttype in ["summary", "ner", "graph", "stats"]:
+                    self._set_task_status(datasource, ttype, "error", "no_docs",
+                                          error="No documents found in datasource")
+                return
+
+            doc_ids = sorted([str(d.get("id")) for d in sample])
+            sample_hash = hashlib.sha256(",".join(doc_ids).encode()).hexdigest()
+            logger.info(f"[insights] Coordinator: {len(sample)} docs, hash={sample_hash[:8]} for {datasource}")
+            self._trigger_tasks(datasource, sample, sample_hash)
+        except Exception as e:
+            logger.error(f"[insights] Coordinator failed for {datasource}: {e}", exc_info=True)
+            for ttype in ["summary", "ner", "graph", "stats"]:
+                self._set_task_status(datasource, ttype, "error", "coordinator_failed", error=str(e))
+
     def _trigger_tasks(self, datasource: str, sample: List[dict], sample_hash: str):
-        """Initialize 'pending' rows and submit to executor."""
+        """Submit all insight tasks to the executor."""
         tasks = ["summary", "ner", "graph", "stats"]
         for ttype in tasks:
             self._set_task_status(datasource, ttype, "pending", sample_hash, clear_data=True)
@@ -217,7 +285,9 @@ class InsightsEngine:
             logger.error(f"Failed to load all tasks: {e}")
             return {"error": str(e)}
 
-    def _set_task_status(self, datasource: str, ttype: str, status: str, sample_hash: str, payload=None, error=None, clear_data=False):
+    def _set_task_status(self, datasource: str, ttype: str, status: str, sample_hash: str,
+                         payload=None, error=None, clear_data=False):
+        """Persist task status to DB and broadcast to SSE subscribers."""
         from src.session.models import InsightsCache, get_db
         with _lock:
             try:
@@ -236,11 +306,21 @@ class InsightsEngine:
                         row.payload = None
                         row.error = None
                     else:
-                        if payload is not None: row.payload = payload
-                        if error is not None: row.error = error
+                        if payload is not None:
+                            row.payload = payload
+                        if error is not None:
+                            row.error = error
                     db.commit()
+                    snapshot = row.to_dict()
+
+                # Notify SSE subscribers that a task changed
+                _event_bus.publish(datasource, {
+                    "type":         "task_update",
+                    "insight_type": ttype,
+                    "task":         snapshot,
+                })
             except Exception as e:
-                logger.error(f"Failed DB update for {ttype}: {e}")
+                logger.error(f"[insights] Failed DB update for {ttype}: {e}")
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -259,35 +339,105 @@ class InsightsEngine:
         except Exception:
             return None
     @staticmethod
-    def _parse_json(raw: str) -> Optional[dict]:
-        """Strip markdown fences and handle common malformed JSON issues."""
-        if not raw: return None
-        cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
-        cleaned = re.sub(r",\s*}", "}", cleaned)
-        cleaned = re.sub(r"//.*", "", cleaned)
-
-        def _extract_known_keys(data: dict) -> dict:
-            # If the LLM wrapped the response in a rogue top-level key, unwrap it
-            if isinstance(data, dict):
-                # Check if it already has the expected keys
-                if any(k in data for k in ("hot_topics", "entities", "nodes", "edges", "trends", "narratives")):
-                    return data
-                # Otherwise, search values for expected keys
-                for v in data.values():
-                    if isinstance(v, dict) and any(k in v for k in ("hot_topics", "entities", "nodes", "edges", "trends", "narratives")):
-                        return v
+    def _extract_known_keys(data: dict) -> dict:
+        """Unwrap a rogue top-level key if the LLM wrapped the real payload in one."""
+        if not isinstance(data, dict):
             return data
+        _KNOWN = {"hot_topics", "entities", "nodes", "edges", "trends",
+                  "narratives", "sentiment", "classification", "summary"}
+        if any(k in data for k in _KNOWN):
+            return data
+        # Search one level deep
+        for v in data.values():
+            if isinstance(v, dict) and any(k in v for k in _KNOWN):
+                return v
+        return data
 
-        try:
-            return _extract_known_keys(json.loads(cleaned))
-        except json.JSONDecodeError:
-            # Last resort: extract first { ... }
-            start = cleaned.find("{")
-            end = cleaned.rfind("}")
-            if start != -1 and end != -1:
-                try: 
-                    return _extract_known_keys(json.loads(cleaned[start:end+1]))
-                except: pass
+    @staticmethod
+    def _extract_json_object(text: str) -> Optional[str]:
+        """Find the first complete JSON object in *text* using brace matching.
+
+        Handles nested objects and JSON strings containing braces/quotes correctly.
+        Returns the substring `{...}` or None if none found.
+        """
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_str = False
+        escape = False
+        for i, ch in enumerate(text[start:], start):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_str:
+                escape = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        return None
+
+    @staticmethod
+    def _parse_json(raw: str) -> Optional[dict]:
+        """Robustly extract a JSON object from LLM output.
+
+        Strategy (each step only runs if the previous failed):
+        1. Strip markdown fences, try direct json.loads.
+        2. Fix trailing commas before } or ], retry json.loads.
+        3. Remove // line comments (only when no :// URLs present), retry.
+        4. Use brace-matching extractor to isolate the first { ... } block.
+        """
+        if not raw:
+            return None
+
+        # Step 0: strip markdown code fences
+        cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
+
+        def _try(text: str) -> Optional[dict]:
+            try:
+                return InsightsEngine._extract_known_keys(json.loads(text))
+            except (json.JSONDecodeError, ValueError):
+                return None
+
+        # Step 1: direct parse
+        result = _try(cleaned)
+        if result is not None:
+            return result
+
+        # Step 2: fix trailing commas before } or ]
+        fixed = re.sub(r",(\s*[}\]])", r"\1", cleaned)
+        result = _try(fixed)
+        if result is not None:
+            return result
+
+        # Step 3: strip // line comments (safe only when no :// URI present)
+        if "//" in fixed and "://" not in fixed:
+            no_comments = re.sub(r"//[^\n]*", "", fixed)
+            result = _try(no_comments)
+            if result is not None:
+                return result
+        else:
+            no_comments = fixed
+
+        # Step 4: brace-matching extraction from the cleaned string
+        obj_str = InsightsEngine._extract_json_object(no_comments)
+        if obj_str:
+            # Apply trailing-comma fix to the extracted substring too
+            obj_str = re.sub(r",(\s*[}\]])", r"\1", obj_str)
+            result = _try(obj_str)
+            if result is not None:
+                return result
+
+        logger.warning(f"[insights] _parse_json exhausted all strategies. Raw[:200]: {raw[:200]}")
         return None
 
     @staticmethod
