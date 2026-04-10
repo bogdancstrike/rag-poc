@@ -127,13 +127,26 @@ class ESClient:
     # ── Sampling ────────────────────────────────────────────────────────────────
 
     def get_sample_docs(self, n: int = 200) -> list[dict]:
-        """Return up to n randomly sampled documents for insights generation."""
+        """Return up to n sampled documents for insights generation.
+        
+        Uses a fixed seed and _seq_no to ensure stable, efficient sampling.
+        """
         try:
             resp = self._client.search(
                 index=self._index,
                 body={
                     "size": min(n, 1000),
-                    "query": {"function_score": {"functions": [{"random_score": {}}]}},
+                    "query": {
+                        "function_score": {
+                            "functions": [{
+                                "random_score": {
+                                    "seed": 42,
+                                    "field": "_seq_no"
+                                }
+                            }],
+                            "boost_mode": "replace"
+                        }
+                    },
                     "_source": True,
                 },
             )

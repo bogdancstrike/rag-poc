@@ -1,14 +1,15 @@
 import {
   Row, Col, Card, Spin, Alert, Button, Tag, Typography, Space, Tooltip,
-  Divider, theme, Empty, Collapse
+  Divider, theme, Empty, Progress
 } from 'antd'
 import {
   ReloadOutlined, InfoCircleOutlined, FireOutlined, RiseOutlined,
-  TeamOutlined, WarningOutlined, ClockCircleOutlined,
+  TeamOutlined, WarningOutlined, ClockCircleOutlined, SyncOutlined,
+  BarChartOutlined, NodeIndexOutlined, DeleteOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
-import { useInsights, useRefreshInsights } from '@/hooks/useInsights'
+import { useInsights, useRefreshInsights, useDeleteInsights } from '@/hooks/useInsights'
 import { TopicBubbleChart } from './TopicBubbleChart'
 import { TrendAreaChart } from './TrendAreaChart'
 import { EntityBarChart } from './EntityBarChart'
@@ -31,19 +32,13 @@ interface Props {
 }
 
 /**
- * InsightsPanel — the left pane showing LLM-generated intelligence.
- *
- * Sections:
- *   1. Hot Topics    — bubble chart + tag list
- *   2. Trends        — horizontal bar chart
- *   3. Narratives    — collapsible cards with "Ask about this" CTA
- *   4. Entities      — bar chart
- *   5. Anomalies     — alert list
+ * InsightsPanel — Displays background task results and progress.
  */
 export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
   const { token } = theme.useToken()
   const { data: insights, isLoading, error } = useInsights(datasource)
   const refreshMut = useRefreshInsights(datasource)
+  const deleteMut = useDeleteInsights(datasource)
 
   if (isLoading) {
     return (
@@ -57,7 +52,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
     return (
       <Alert
         type="error"
-        title="Failed to load insights"
+        message="Failed to load insights"
         description={(error as Error).message}
         action={<Button size="small" onClick={() => refreshMut.mutate()}>Retry</Button>}
       />
@@ -66,8 +61,41 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
 
   if (!insights) return null
 
+  const tasks = insights.tasks || {}
   const meta = insights._meta
-  const generatedAt = meta?.generated_at ? dayjs(meta.generated_at).fromNow() : '—'
+  const summaryTask = tasks.summary || { status: 'pending' }
+  const nerTask     = tasks.ner || { status: 'pending' }
+  const graphTask   = tasks.graph || { status: 'pending' }
+  const statsTask   = tasks.stats || { status: 'pending' }
+
+  const isProcessing = meta?.is_processing || Object.values(tasks).some((t: any) => t.status === 'processing' || t.status === 'pending')
+  const generatedAt = summaryTask.generated_at ? dayjs(summaryTask.generated_at).fromNow() : '—'
+
+  const renderTaskHeader = (title: string, task: any, icon: any) => (
+    <Row justify="space-between" align="middle" style={{ width: '100%' }}>
+      <Space>
+        {icon}
+        <Text strong>{title}</Text>
+      </Space>
+      <Space>
+        {(task.status === 'processing' || task.status === 'pending') && (
+          <SyncOutlined spin style={{ color: token.colorPrimary }} />
+        )}
+        {task.status === 'error' && (
+          <Tooltip title={task.error}>
+            <WarningOutlined style={{ color: token.colorError }} />
+          </Tooltip>
+        )}
+      </Space>
+    </Row>
+  )
+
+  const renderLoadingState = () => (
+    <div style={{ padding: '20px 0', textAlign: 'center' }}>
+      <Spin size="small" />
+      <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>Analyzing documents...</Text>
+    </div>
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -82,24 +110,28 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
           <Space>
             <FireOutlined style={{ color: token.colorWarning }} />
             <Text strong style={{ fontSize: 13 }}>Intelligence Report</Text>
-            {meta?.cached && (
-              <Tag color="blue" style={{ fontSize: 10 }}>CACHED</Tag>
-            )}
+            {isProcessing && <Tag color="processing" icon={<SyncOutlined spin />}>UPDATING</Tag>}
           </Space>
           <Space size={8}>
             <Text style={{ fontSize: 11, color: token.colorTextDescription }}>
               <ClockCircleOutlined /> {generatedAt}
             </Text>
-            {meta?.doc_count && (
-              <Text style={{ fontSize: 11, color: token.colorTextDescription }}>
-                · {meta.doc_count} docs sampled
-              </Text>
-            )}
-            <Tooltip title="Regenerate intelligence from corpus">
+            <Tooltip title="Delete cached insights">
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                loading={deleteMut.isPending}
+                onClick={() => deleteMut.mutate()}
+              >
+                Clear
+              </Button>
+            </Tooltip>
+            <Tooltip title="Force full background regeneration">
               <Button
                 size="small"
                 icon={<ReloadOutlined />}
-                loading={refreshMut.isPending}
+                loading={refreshMut.isPending || isProcessing}
                 onClick={() => refreshMut.mutate()}
               >
                 Refresh
@@ -109,29 +141,54 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
         </Row>
       </Card>
 
-      {/* ── Hot Topics ─────────────────────────────────────────────────────── */}
-      {insights.hot_topics?.length > 0 && (
-        <Card
-          variant="borderless"
-          title={
-            <Space><FireOutlined style={{ color: token.colorWarning }} />
-              <Text strong>Hot Topics</Text>
-            </Space>
-          }
-          style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-          styles={{ body: { padding: '8px 16px 16px' } }}
-        >
+      {/* ── Stats ── */}
+      <Card
+        variant="borderless"
+        title={renderTaskHeader("Corpus Statistics", statsTask, <BarChartOutlined style={{ color: token.colorInfo }} />)}
+        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+        styles={{ body: { padding: '12px 16px' } }}
+      >
+        {statsTask.payload ? (
+          <Row gutter={16}>
+            <Col span={8}>
+              <div style={{ textAlign: 'center' }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>TOTAL DOCS</Text>
+                <Title level={4} style={{ margin: 0 }}>{statsTask.payload.doc_count}</Title>
+              </div>
+            </Col>
+            <Col span={16}>
+              <div style={{ display: 'flex', gap: 8, overflowX: 'auto' }}>
+                {statsTask.payload.distribution?.map((d: any, i: number) => (
+                  <div key={i} style={{ minWidth: 80 }}>
+                    <Text style={{ fontSize: 10 }}>{d.label}</Text>
+                    <Progress percent={d.value} size="small" strokeColor={token.colorPrimary} />
+                  </div>
+                ))}
+              </div>
+            </Col>
+          </Row>
+        ) : renderLoadingState()}
+      </Card>
+
+      {/* ── Hot Topics ── */}
+      <Card
+        variant="borderless"
+        title={renderTaskHeader("Hot Topics", summaryTask, <FireOutlined style={{ color: token.colorWarning }} />)}
+        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+        styles={{ body: { padding: '8px 16px 16px' } }}
+      >
+        {summaryTask.payload ? (
           <Row gutter={[16, 12]}>
             <Col xs={24} md={14}>
-              <TopicBubbleChart topics={insights.hot_topics} height={240} />
+              <TopicBubbleChart topics={summaryTask.payload.hot_topics || []} height={200} />
             </Col>
             <Col xs={24} md={10}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 8 }}>
-                {insights.hot_topics.map((t, i) => (
+                {(summaryTask.payload.hot_topics || []).map((t: any, i: number) => (
                   <Tag
                     key={i}
                     color={SENTIMENT_COLOR[t.sentiment]}
-                    style={{ cursor: 'pointer', fontSize: 11, padding: '2px 8px' }}
+                    style={{ cursor: 'pointer', fontSize: 11 }}
                     onClick={() => onAskAbout(`What can you tell me about "${t.topic}"?`)}
                   >
                     {t.topic}
@@ -140,95 +197,56 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
               </div>
             </Col>
           </Row>
-        </Card>
-      )}
+        ) : renderLoadingState()}
+      </Card>
 
-      {/* ── Trends ─────────────────────────────────────────────────────────── */}
-      {insights.trends?.length > 0 && (
-        <Card
-          variant="borderless"
-          title={<Space><RiseOutlined style={{ color: token.colorSuccess }} /><Text strong>Trends</Text></Space>}
-          style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-          styles={{ body: { padding: '8px 16px 16px' } }}
-        >
-          <TrendAreaChart trends={insights.trends} height={240} />
-        </Card>
-      )}
+      {/* ── Trends ── */}
+      <Card
+        variant="borderless"
+        title={renderTaskHeader("Trends", summaryTask, <RiseOutlined style={{ color: token.colorSuccess }} />)}
+        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+        styles={{ body: { padding: '8px 16px 16px' } }}
+      >
+        {summaryTask.payload ? (
+          <TrendAreaChart trends={summaryTask.payload.trends || []} height={200} />
+        ) : renderLoadingState()}
+      </Card>
 
-      {/* ── Narratives ─────────────────────────────────────────────────────── */}
-      {insights.narratives?.length > 0 && (
-        <Card
-          variant="borderless"
-          title={<Space><InfoCircleOutlined style={{ color: token.colorInfo }} /><Text strong>Key Narratives</Text></Space>}
-          style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-          styles={{ body: { padding: '8px 16px 16px' } }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {insights.narratives.map((n, i) => (
-              <NarrativeCard
-                key={i}
-                narrative={n}
-                sentiment={insights.hot_topics?.[i % (insights.hot_topics.length || 1)]?.sentiment}
-                onAskAbout={onAskAbout}
-              />
-            ))}
+      {/* ── Entities ── */}
+      <Card
+        variant="borderless"
+        title={renderTaskHeader("Identified Entities", nerTask, <TeamOutlined style={{ color: token.colorPrimary }} />)}
+        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+        styles={{ body: { padding: '8px 16px 16px' } }}
+      >
+        {nerTask.payload ? (
+          <EntityBarChart entities={nerTask.payload.entities || []} height={200} />
+        ) : renderLoadingState()}
+      </Card>
+
+      {/* ── Graph ── */}
+      <Card
+        variant="borderless"
+        title={renderTaskHeader("Relationship Network", graphTask, <NodeIndexOutlined style={{ color: token.colorPurple }} />)}
+        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+        styles={{ body: { padding: '16px' } }}
+      >
+        {graphTask.payload ? (
+          <div style={{ background: '#f5f5f5', borderRadius: 8, padding: 12, fontSize: 12 }}>
+            <Text type="secondary">Graph visualization coming soon. Current detections:</Text>
+            <Divider style={{ margin: '8px 0' }} />
+            <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+              {graphTask.payload.edges?.map((e: any, i: number) => (
+                <div key={i} style={{ marginBottom: 4 }}>
+                  <Tag size="small">{e.source}</Tag> 
+                  <Text type="secondary" style={{ fontSize: 10 }}> —[{e.relationship}]—&gt; </Text>
+                  <Tag size="small">{e.target}</Tag>
+                </div>
+              ))}
+            </div>
           </div>
-        </Card>
-      )}
-
-      {/* ── Entities + Anomalies ────────────────────────────────────────────── */}
-      <Row gutter={[16, 16]}>
-        {insights.entities?.length > 0 && (
-          <Col xs={24} lg={insights.anomalies?.length > 0 ? 14 : 24}>
-            <Card
-              variant="borderless"
-              title={<Space><TeamOutlined style={{ color: token.colorPrimary }} /><Text strong>Key Entities</Text></Space>}
-              style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-              styles={{ body: { padding: '8px 16px 16px' } }}
-            >
-              <EntityBarChart entities={insights.entities} height={240} />
-            </Card>
-          </Col>
-        )}
-
-        {insights.anomalies?.length > 0 && (
-          <Col xs={24} lg={insights.entities?.length > 0 ? 10 : 24}>
-            <Card
-              variant="borderless"
-              title={<Space><WarningOutlined style={{ color: token.colorError }} /><Text strong>Anomalies</Text></Space>}
-              style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-              styles={{ body: { padding: '8px 16px 16px' } }}
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {insights.anomalies.map((a, i) => (
-                  <Alert
-                    key={i}
-                    type="warning"
-                    title={a.description}
-                    description={a.docs?.length > 0 ? `Docs: ${a.docs.slice(0, 3).join(', ')}` : undefined}
-                    action={
-                      <Button
-                        size="small"
-                        type="link"
-                        onClick={() => onAskAbout(`Explain the anomaly: "${a.description}"`)}
-                      >
-                        Ask
-                      </Button>
-                    }
-                  />
-                ))}
-              </div>
-            </Card>
-          </Col>
-        )}
-      </Row>
-
-      {/* Empty state */}
-      {!insights.hot_topics?.length && !insights.narratives?.length && (
-        <Card variant="borderless" style={{ border: `1px solid ${token.colorBorderSecondary}` }}>
-          <Empty description="No insights available yet. Add data to the corpus and click Refresh." />
-        </Card>
-      )}
+        ) : renderLoadingState()}
+      </Card>
     </div>
   )
 }

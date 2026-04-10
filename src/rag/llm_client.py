@@ -102,11 +102,10 @@ class LLMClient:
     def complete_json(self, messages: list[dict], system: str = "") -> str:
         """Request a JSON response. Returns raw string — caller parses it.
 
-        Ollama respects the response_format param for models that support it,
-        but we also add JSON instructions in the system prompt as a fallback.
+        Ollama respects the response_format param for models that support it.
+        We ensure the system prompt is focused on JSON output.
         """
-        json_system = system + "\n\nIMPORTANT: Respond ONLY with valid JSON. No explanation, no markdown fences."
-        full_messages = self._build_messages(messages, json_system)
+        full_messages = self._build_messages(messages, system)
         with tracer.start_as_current_span("llm.complete_json") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
@@ -115,8 +114,9 @@ class LLMClient:
                     model=self._model,
                     messages=full_messages,
                     max_tokens=self._max_tokens,
-                    temperature=0.1,   # lower temperature for structured output
+                    temperature=0.0,   # Deterministic as possible for JSON
                     stream=False,
+                    response_format={"type": "json_object"},
                     # Ollama: expand context window to 16K so insights prompt fits
                     extra_body={"options": {"num_ctx": 16384}},
                 )

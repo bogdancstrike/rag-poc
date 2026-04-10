@@ -276,6 +276,21 @@ def insights_refresh_handler(app, operation, request, **kwargs):
             return {"error": str(e)}, 500
 
 
+def insights_delete_handler(app, operation, request, **kwargs):
+    """DELETE /v1/insights — wipe the insights cache for a datasource."""
+    datasource = flask_request.args.get("datasource", "default")
+    with tracer.start_as_current_span("api.insights.delete") as span:
+        span.set_attribute("insights.datasource", datasource)
+        try:
+            engine = get_insights_engine()
+            engine.invalidate(datasource)
+            return {"status": "deleted", "datasource": datasource}, 200
+        except Exception as e:
+            logger.error(f"[insights] Delete error: {e}", exc_info=True)
+            span.set_attribute("insights.error", str(e))
+            return {"error": str(e)}, 500
+
+
 # ── Sessions ────────────────────────────────────────────────────────────────────
 
 def sessions_handler(app, operation, request, **kwargs):

@@ -12,11 +12,12 @@ from contextlib import contextmanager
 
 from sqlalchemy import (
     Column, String, Integer, Text, DateTime, JSON,
-    ForeignKey, create_engine, Index,
+    ForeignKey, create_engine, Index, text
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 from src.config import Config
+from framework.commons.logger import logger
 
 Base = declarative_base()
 
@@ -79,28 +80,36 @@ class Message(Base):
 
 
 class InsightsCache(Base):
-    """Cached AI-generated intelligence report for a datasource.
+    """Granular cached insights and background tasks.
 
-    One row per datasource. Overwritten on each refresh.
-    TTL logic is handled in InsightsEngine (compared to generated_at).
+    Instead of one monolithic payload, each insight type (summary, ner, stats, etc.)
+    is stored as its own row, allowing partial updates and background generation.
     """
     __tablename__ = "rag_insights_cache"
 
-    id           = Column(Integer, primary_key=True, autoincrement=True)
-    datasource   = Column(String(100), nullable=False, unique=True, default="default")
-    payload      = Column(JSON, nullable=False)          # full insights dict from LLM
-    generated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    datasource   = Column(String(100), primary_key=True, default="default")
+    insight_type = Column(String(50),  primary_key=True)  # "summary", "ner", "graph", "stats"
+    
+    status       = Column(String(20),  nullable=False, default="pending") # pending, processing, complete, error
+    payload      = Column(JSON,        nullable=True)
+    error        = Column(Text,        nullable=True)
+    
+    generated_at = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc))
+    sample_hash  = Column(String(64),  nullable=True)
 
     __table_args__ = (
-        Index("ix_insights_datasource_ts", "datasource", "generated_at"),
+        Index("ix_insights_datasource_type", "datasource", "insight_type"),
     )
 
     def to_dict(self):
         return {
-            "id": self.id,
-            "datasource": self.datasource,
-            "payload": self.payload,
+            "datasource":   self.datasource,
+            "insight_type": self.insight_type,
+            "status":       self.status,
+            "payload":      self.payload,
+            "error":        self.error,
             "generated_at": self.generated_at.isoformat() if self.generated_at else None,
+            "sample_hash":  self.sample_hash,
         }
 
 
@@ -128,8 +137,24 @@ def get_session_factory():
 
 
 def init_db():
-    """Create all tables if they do not exist."""
-    Base.metadata.create_all(bind=get_engine())
+    """Create all tables if they do not exist.
+    
+    In development, we detect if the insights table needs a schema migration.
+    """
+    engine = get_engine()
+    
+    # Check if we need to drop the old insights table (schema migration)
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    if "rag_insights_cache" in inspector.get_table_names():
+        columns = [c["name"] for c in inspector.get_columns("rag_insights_cache")]
+        if "insight_type" not in columns:
+            logger.warning("[db] Old rag_insights_cache detected — dropping for schema update")
+            with engine.connect() as conn:
+                conn.execute(text("DROP TABLE IF EXISTS rag_insights_cache CASCADE"))
+                conn.commit()
+
+    Base.metadata.create_all(bind=engine)
 
 
 @contextmanager

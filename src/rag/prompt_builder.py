@@ -20,29 +20,37 @@ Rules:
 - Use markdown for structure when it aids clarity (bullet points, bold key terms).
 """
 
-INSIGHTS_SYSTEM_PROMPT = """You are an intelligence analysis engine for the QSINT platform.
-Analyse the provided document sample and extract structured intelligence.
+INSIGHTS_SUMMARY_PROMPT = """You are a specialized intelligence extraction engine.
+Analyse the provided documents and output structured insights.
 
-Return ONLY valid JSON with this exact structure:
+FORMAT RULES:
+1. Output ONLY valid JSON.
+2. The JSON must have EXACTLY this structure:
 {
-  "hot_topics": [
-    {"topic": "string", "count_estimate": int, "summary": "string", "sentiment": "positive|negative|neutral|mixed"}
-  ],
-  "narratives": [
-    {"title": "string", "description": "string", "evidence_docs": ["doc_id1", "doc_id2"]}
-  ],
-  "trends": [
-    {"label": "string", "direction": "rising|falling|stable", "change_pct": float, "time_period": "string"}
-  ],
-  "entities": [
-    {"name": "string", "type": "person|org|location|event|other", "frequency": int, "related": ["string"]}
-  ],
-  "anomalies": [
-    {"description": "string", "docs": ["doc_id1"]}
-  ]
+  "hot_topics": [{"topic": "string", "count_estimate": int, "summary": "string", "sentiment": "positive|negative|neutral|mixed"}],
+  "narratives": [{"title": "string", "description": "string", "evidence_docs": ["doc_id"]}],
+  "trends": [{"label": "string", "direction": "rising|falling|stable", "change_pct": float, "time_period": "string"}]
 }
+3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
+"""
 
-Be specific and grounded in the documents. Aim for 5-10 items per category where data permits.
+INSIGHTS_NER_PROMPT = """Extract named entities from the provided documents.
+FORMAT RULES:
+1. Output ONLY valid JSON.
+2. The JSON must have EXACTLY this structure:
+{
+  "entities": [{"name": "string", "type": "person|org|location|event|tool|vulnerability", "frequency": int, "sentiment": "string"}]
+}
+"""
+
+INSIGHTS_GRAPH_PROMPT = """Detect relationships and connections between entities in the documents.
+FORMAT RULES:
+1. Output ONLY valid JSON.
+2. The JSON must have EXACTLY this structure:
+{
+  "nodes": [{"id": "string", "label": "string", "type": "string"}],
+  "edges": [{"source": "string", "target": "string", "relationship": "string", "weight": float}]
+}
 """
 
 
@@ -57,64 +65,44 @@ class PromptBuilder:
         chunks: list[dict],
         history: list[dict],
     ) -> tuple[list[dict], str]:
-        """Build the messages list and system prompt for a chat turn.
-
-        Args:
-            user_query: The user's current question.
-            chunks:     Retrieved document chunks [{id, text, score, ...}].
-            history:    Previous messages from Postgres [{role, content}].
-
-        Returns:
-            (messages, system_prompt) ready to pass to LLMClient.complete() or .stream()
-        """
         context_block = self._format_chunks(chunks)
 
-        # Build conversation history (excluding the current query)
         messages: list[dict] = []
         for msg in history:
-            messages.append({
-                "role":    msg["role"],
-                "content": msg["content"],
-            })
+            messages.append({"role": msg["role"], "content": msg["content"]})
 
-        # The current user message includes the retrieved context
-        user_content = f"""Context documents:
-{context_block}
-
-Question: {user_query}"""
-
+        user_content = f"Context documents:\n{context_block}\n\nQuestion: {user_query}"
         messages.append({"role": "user", "content": user_content})
 
         return messages, RAG_SYSTEM_PROMPT
 
     # ── Insights prompt ─────────────────────────────────────────────────────────
 
-    def build_insights_messages(self, sample_docs: list[dict]) -> tuple[list[dict], str]:
-        """Build the messages list for the insights generation call.
-
-        Args:
-            sample_docs: Random sample of documents from the corpus.
-
-        Returns:
-            (messages, system_prompt) ready to pass to LLMClient.complete_json()
-        """
+    def build_insights_messages(self, sample_docs: list[dict], task_type: str = "summary") -> tuple[list[dict], str]:
+        """Build the messages list for the insights generation call."""
         doc_texts = "\n\n".join(
             f'<doc id="{doc["id"]}">{doc["text"][:300]}</doc>'
             for doc in sample_docs[:Config.INSIGHTS_MAX_DOCS]
         )
 
+        prompt_map = {
+            "summary": INSIGHTS_SUMMARY_PROMPT,
+            "ner":     INSIGHTS_NER_PROMPT,
+            "graph":   INSIGHTS_GRAPH_PROMPT,
+        }
+        system_prompt = prompt_map.get(task_type, INSIGHTS_SUMMARY_PROMPT)
+
         messages = [{
             "role": "user",
-            "content": f"Analyse these {len(sample_docs)} documents and extract structured intelligence:\n\n{doc_texts}",
+            "content": f"Analyse these {len(sample_docs)} documents and output structured JSON for {task_type}.\n\nREQUIRED SCHEMA:\n{system_prompt}\n\nDocuments:\n{doc_texts}",
         }]
 
-        return messages, INSIGHTS_SYSTEM_PROMPT
+        return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _format_chunks(chunks: list[dict]) -> str:
-        """Format retrieved chunks as XML doc blocks for the LLM context."""
         if not chunks:
             return "<context>No relevant documents found.</context>"
 
@@ -123,7 +111,5 @@ Question: {user_query}"""
             doc_id = chunk.get("id", "unknown")
             score  = chunk.get("score", 0)
             text   = chunk.get("text", "").strip()
-            parts.append(
-                f'<doc id="{doc_id}" relevance="{score:.2f}">\n{text}\n</doc>'
-            )
+            parts.append(f'<doc id="{doc_id}" relevance="{score:.2f}">\n{text}\n</doc>')
         return "\n\n".join(parts)

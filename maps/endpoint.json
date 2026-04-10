@@ -77,6 +77,17 @@
     },
     {
       "namespace": "rag",
+      "operation_name": "v1_insights_delete",
+      "model_name": "Empty",
+      "request_method": ["DELETE"],
+      "api_url": "/v1/insights",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "insights_delete_handler"
+      }
+    },
+    {
+      "namespace": "rag",
       "operation_name": "v1_sessions",
       "model_name": "Empty",
       "request_method": ["GET", "POST"],

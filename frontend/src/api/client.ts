@@ -7,7 +7,7 @@ const BASE_URL = ((import.meta as any).env?.VITE_API_BASE_URL || '') + '/rag'
 export const apiClient = axios.create({
   baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30_000,
+  timeout: 60_000,
 })
 
 apiClient.interceptors.response.use(
