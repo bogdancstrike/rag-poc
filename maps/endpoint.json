@@ -1,0 +1,123 @@
+{
+  "namespaces": [
+    {
+      "name": "rag",
+      "description": "QSINT RAG API"
+    }
+  ],
+  "models": {
+    "Empty": {}
+  },
+  "endpoints": [
+    {
+      "namespace": "rag",
+      "operation_name": "health",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/health",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "health_check"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "liveness",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/liveness",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "liveness"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_chat",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/chat",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "chat_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_chat_stream",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/chat/stream",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "chat_stream_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_insights",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/insights",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "insights_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_insights_refresh",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/insights/refresh",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "insights_refresh_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_sessions",
+      "model_name": "Empty",
+      "request_method": ["GET", "POST"],
+      "api_url": "/v1/sessions",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "sessions_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_session_detail",
+      "model_name": "Empty",
+      "request_method": ["GET", "DELETE", "PATCH"],
+      "api_url": "/v1/sessions/<session_id>",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "session_detail_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_session_messages",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/sessions/<session_id>/messages",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "session_messages_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_datasource_status",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/datasource/status",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "datasource_status_handler"
+      }
+    }
+  ]
+}

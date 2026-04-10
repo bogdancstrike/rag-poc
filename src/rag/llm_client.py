@@ -1,0 +1,152 @@
+"""LLM client wrapping the OpenAI-compatible Ollama API.
+
+Supports both synchronous completion and streaming (for SSE endpoints).
+Uses the openai Python SDK with a custom base_url pointing at Ollama.
+"""
+from typing import Generator
+
+from openai import OpenAI
+from framework.commons.logger import logger
+from framework.tracing import get_tracer
+
+from src.config import Config
+
+tracer = get_tracer()
+
+
+class LLMClient:
+    """Thin wrapper around the OpenAI SDK pointing at a local Ollama instance."""
+
+    def __init__(self):
+        # Ollama exposes an OpenAI-compatible endpoint at /v1
+        # api_key is required by the SDK but unused by Ollama
+        self._client = OpenAI(
+            base_url=Config.LLM_BASE_URL,
+            api_key="ollama",  # dummy key — Ollama doesn't validate it
+        )
+        self._model       = Config.LLM_MODEL
+        self._max_tokens  = Config.LLM_MAX_TOKENS
+        self._temperature = Config.LLM_TEMPERATURE
+
+    # ── Synchronous completion ──────────────────────────────────────────────────
+
+    def complete(self, messages: list[dict], system: str = "") -> str:
+        """Send messages to the LLM and return the full response text.
+
+        Args:
+            messages: List of {'role': ..., 'content': ...} dicts.
+            system:   Optional system prompt prepended as a system message.
+
+        Returns:
+            The assistant's reply as a plain string.
+        """
+        full_messages = self._build_messages(messages, system)
+        with tracer.start_as_current_span("llm.complete") as span:
+            span.set_attribute("llm.model", self._model)
+            span.set_attribute("llm.messages_count", len(full_messages))
+            span.set_attribute("llm.max_tokens", self._max_tokens)
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=full_messages,
+                    max_tokens=self._max_tokens,
+                    temperature=self._temperature,
+                    stream=False,
+                )
+                content = resp.choices[0].message.content or ""
+                span.set_attribute("llm.response_length", len(content))
+                return content
+            except Exception as e:
+                logger.error(f"[llm] complete error: {e}", exc_info=True)
+                span.set_attribute("llm.error", str(e))
+                raise
+
+    # ── Streaming ───────────────────────────────────────────────────────────────
+
+    def stream(self, messages: list[dict], system: str = "") -> Generator[str, None, None]:
+        """Stream the LLM response as text delta chunks.
+
+        Uses create(stream=True) which yields ChatCompletionChunk objects
+        with choices[0].delta.content.
+
+        Note: the caller (chat_stream_handler) wraps the generator in its own
+        llm_span — this span covers the initial API call setup only.
+        """
+        full_messages = self._build_messages(messages, system)
+        with tracer.start_as_current_span("llm.stream.setup") as span:
+            span.set_attribute("llm.model", self._model)
+            span.set_attribute("llm.messages_count", len(full_messages))
+            try:
+                stream = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=full_messages,
+                    max_tokens=self._max_tokens,
+                    temperature=self._temperature,
+                    stream=True,
+                )
+            except Exception as e:
+                logger.error(f"[llm] stream error: {e}", exc_info=True)
+                span.set_attribute("llm.error", str(e))
+                raise
+        # Yield outside the span so we don't hold a span open during streaming
+        try:
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            logger.error(f"[llm] stream error: {e}", exc_info=True)
+            raise
+
+    # ── JSON structured output ──────────────────────────────────────────────────
+
+    def complete_json(self, messages: list[dict], system: str = "") -> str:
+        """Request a JSON response. Returns raw string — caller parses it.
+
+        Ollama respects the response_format param for models that support it,
+        but we also add JSON instructions in the system prompt as a fallback.
+        """
+        json_system = system + "\n\nIMPORTANT: Respond ONLY with valid JSON. No explanation, no markdown fences."
+        full_messages = self._build_messages(messages, json_system)
+        with tracer.start_as_current_span("llm.complete_json") as span:
+            span.set_attribute("llm.model", self._model)
+            span.set_attribute("llm.messages_count", len(full_messages))
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=full_messages,
+                    max_tokens=self._max_tokens,
+                    temperature=0.1,   # lower temperature for structured output
+                    stream=False,
+                    # Ollama: expand context window to 16K so insights prompt fits
+                    extra_body={"options": {"num_ctx": 16384}},
+                )
+                content = resp.choices[0].message.content or "{}"
+                span.set_attribute("llm.response_length", len(content))
+                return content
+            except Exception as e:
+                logger.error(f"[llm] complete_json error: {e}", exc_info=True)
+                span.set_attribute("llm.error", str(e))
+                raise
+
+    # ── Helpers ─────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_messages(messages: list[dict], system: str) -> list[dict]:
+        """Prepend system message if provided, then append conversation messages."""
+        result = []
+        if system:
+            result.append({"role": "system", "content": system})
+        result.extend(messages)
+        return result
+
+
+# Module-level singleton
+_llm: LLMClient | None = None
+
+
+def get_llm() -> LLMClient:
+    """Return the module-level LLMClient singleton."""
+    global _llm
+    if _llm is None:
+        _llm = LLMClient()
+    return _llm
