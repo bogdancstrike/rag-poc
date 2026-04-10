@@ -61,6 +61,14 @@ class Config:
     KAFKA_MAX_JOBS_PER_TP_PER_TICK = int(os.getenv("KAFKA_MAX_JOBS_PER_TP_PER_TICK", "20"))
     KAFKA_COMMIT_STRATEGY    = os.getenv("KAFKA_COMMIT_STRATEGY", "before")
 
+    # New: RAG-specific Kafka topics
+    KAFKA_TOPIC_LLM_TASKS  = os.getenv("KAFKA_TOPIC_LLM_TASKS",  "qsint.rag.llm_tasks")
+    KAFKA_TOPIC_FAST_TASKS = os.getenv("KAFKA_TOPIC_FAST_TASKS", "qsint.rag.fast_tasks")
+    KAFKA_CONSUMER_GROUP   = os.getenv("KAFKA_CONSUMER_GROUP",   "qsint-rag-worker")
+
+    # LLM concurrency: 1=sequential, N=up to N parallel LLM calls via Kafka worker
+    LLM_PARALLEL = int(os.getenv("LLM_PARALLEL", "2"))
+
     # ── Redis (required by QF framework at import time — not used for RAG) ────
     REDIS_HOST            = os.getenv("REDIS_HOST", "localhost")
     REDIS_PORT            = os.getenv("REDIS_PORT", "6379")

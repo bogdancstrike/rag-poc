@@ -5,6 +5,8 @@ volumes:
   postgres-data: {}
   es-data: {}
   ollama-data: {}
+  redis-data: {}
+  kafka-data: {}
 
 services:
 
@@ -101,6 +103,96 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ── Kafka (KRaft mode, no Zookeeper) ────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: qsint-rag-kafka
+    networks: [ragnet]
+    ports:
+      - "9094:9094"
+    environment:
+      # KRaft — no Zookeeper required
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qg"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── Kafka UI ─────────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: qsint-rag-kafka-ui
+    networks: [ragnet]
+    ports:
+      - "${KAFKA_UI_PORT:-8090}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: qsint-rag
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: qsint-rag-redis
+    networks: [ragnet]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── pgAdmin ──────────────────────────────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: qsint-rag-pgadmin
+    networks: [ragnet]
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_DEFAULT_EMAIL:-qf@qsint.com}"
+      PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_DEFAULT_PASSWORD:-qf}"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # ── Kibana ───────────────────────────────────────────────────────────────────
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: qsint-rag-kibana
+    networks: [ragnet]
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── Backend ─────────────────────────────────────────────────────────────────
   backend:
     build:
@@ -116,12 +208,17 @@ services:
       ES_HOST: "http://elasticsearch:9200"
       LLM_BASE_URL: "http://ollama:11434/v1"
       QSINT_OTLP_ENDPOINT: "http://jaeger:4317"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      REDIS_HOST: "redis"
+      LLM_PARALLEL: "${LLM_PARALLEL:-2}"
     depends_on:
       postgres:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     restart: unless-stopped
 

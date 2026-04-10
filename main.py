@@ -45,7 +45,8 @@ def main():
         f"[QSINT-RAG] Starting — dev_mode={Config.DEV_MODE} "
         f"datasource={Config.DATASOURCE_TYPE} "
         f"llm_model={Config.LLM_MODEL} "
-        f"api_port={Config.API_PORT}"
+        f"api_port={Config.API_PORT} "
+        f"llm_parallel={Config.LLM_PARALLEL}"
     )
 
     # Register signal handlers for clean shutdown
@@ -59,6 +60,14 @@ def main():
         logger.info("[QSINT-RAG] Database tables initialized")
     except Exception as e:
         logger.warning(f"[QSINT-RAG] Could not initialize DB (will retry on first use): {e}")
+
+    # Start Kafka consumer worker
+    from src.worker.kafka_consumer import start_consumer
+    try:
+        start_consumer()
+        logger.info("[QSINT-RAG] Kafka consumer started")
+    except Exception as e:
+        logger.warning(f"[QSINT-RAG] Kafka consumer not started (fallback to threads): {e}")
 
     settings = FrameworkSettings(
         enable_etl=False,          # No Kafka — RAG is HTTP only

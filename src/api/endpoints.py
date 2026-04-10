@@ -858,7 +858,6 @@ def document_enrichment_handler(app, operation, request, **kwargs):
         span.set_attribute("enrich.force", force)
 
         from src.session.models import DocumentEnrichment, get_db
-        from src.rag.insights_engine import _executor
 
         with get_db() as db:
             row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
@@ -884,7 +883,8 @@ def document_enrichment_handler(app, operation, request, **kwargs):
             db.commit()
             result = row.to_dict()
 
-        _executor.submit(_run_enrichment_background, datasource, doc_id, text)
+        from src.worker.kafka_producer import publish_task
+        publish_task({"task_type": "enrich_doc", "datasource": datasource, "doc_id": doc_id, "text": text})
         span.set_attribute("enrich.cache_hit", False)
         return result, 202
 
@@ -915,73 +915,6 @@ def document_enrich_field_handler(app, operation, request, **kwargs):
         span.set_attribute("enrich.field", field)
 
         from src.session.models import DocumentEnrichment, get_db
-        from src.rag.insights_engine import _executor
-
-        def _run_field_enrichment():
-            from src.rag.llm_client import get_llm
-            from src.rag.prompt_builder import PromptBuilder
-            from src.rag.insights_engine import InsightsEngine
-
-            try:
-                partial: dict = {}
-
-                if field == "iocs":
-                    # Pure regex — no LLM call needed
-                    partial = {"iocs": _extract_iocs(text)}
-
-                elif field == "locations":
-                    builder = PromptBuilder()
-                    messages, system = builder.build_field_enrichment_messages(text[:3000], "locations")
-                    llm = get_llm()
-                    raw = llm.complete_json(messages, system)
-                    parsed = InsightsEngine._parse_json(raw) or {}
-                    location_names = parsed.get("locations", [])
-                    geocoded = []
-                    for name in location_names[:20]:
-                        geo = _geocode_location(name)
-                        geocoded.append(geo if geo else {"name": name, "lat": None, "lon": None, "display_name": name})
-                    partial = {"locations": geocoded}
-
-                elif field == "translation":
-                    builder = PromptBuilder()
-                    messages, system = builder.build_translation_messages(text[:4000])
-                    llm = get_llm()
-                    raw = llm.complete_json(messages, system)
-                    parsed = InsightsEngine._parse_json(raw) or {}
-                    partial = {"translation": parsed.get("text", "")}
-
-                else:
-                    # LLM-based fields: sentiment, classification, entities, summary, graph, timeline
-                    builder = PromptBuilder()
-                    messages, system = builder.build_field_enrichment_messages(text[:3000], field)
-                    llm = get_llm()
-                    raw = llm.complete_json(messages, system)
-                    partial = InsightsEngine._parse_json(raw) or {}
-                    if not partial:
-                        raise ValueError(f"Failed to parse {field} JSON from LLM")
-
-                with get_db() as db:
-                    row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-                    if not row:
-                        row = DocumentEnrichment(doc_id=doc_id, datasource=datasource, status="complete", payload={})
-                        db.add(row)
-                    existing = dict(row.payload or {})
-                    existing.update(partial)
-                    row.payload = existing
-                    row.status = "complete"
-                    row.error = None
-                    db.commit()
-                    logger.info(f"[enrich] Field '{field}' updated for doc_id={doc_id}")
-            except Exception as e:
-                logger.error(f"[enrich] Field '{field}' failed: {e}", exc_info=True)
-                try:
-                    with get_db() as db:
-                        row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-                        if row:
-                            row.error = str(e)
-                            db.commit()
-                except Exception:
-                    pass
 
         # Mark the field as refreshing (keep existing payload)
         with get_db() as db:
@@ -992,7 +925,9 @@ def document_enrich_field_handler(app, operation, request, **kwargs):
             db.commit()
             result = row.to_dict()
 
-        _executor.submit(_run_field_enrichment)
+        from src.worker.kafka_producer import publish_task
+        publish_task({"task_type": "enrich_field", "datasource": datasource,
+                      "doc_id": doc_id, "text": text, "field": field})
         return result, 202
 
 def insights_stream_handler(app, operation, request, **kwargs):
@@ -1059,21 +994,19 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
 
         try:
             if category == "insight":
-                from src.rag.insights_engine import get_insights_engine, _executor
+                from src.rag.insights_engine import get_insights_engine
                 engine = get_insights_engine()
-                from src.rag.retriever import get_retriever
-                import hashlib
 
-                # Mark pending and run coordinator to re-sample + trigger
+                # Mark pending and publish coordinator task
                 engine._set_task_status(datasource, task, "pending", "manual_restart", clear_data=True)
-                _executor.submit(engine._run_coordinator, datasource)
+                from src.worker.kafka_producer import publish_task
+                publish_task({"task_type": "insight_coordinator", "datasource": datasource})
                 return {"status": "restarted", "task": task, "category": category}, 200
 
             elif category == "enrichment":
                 # doc_id == task; fetch text from ES and re-run enrichment
                 from src.datasource.es_client import ESClient
                 from src.session.models import DocumentEnrichment, get_db
-                from src.rag.insights_engine import _executor
 
                 client = ESClient()
                 docs, _ = client.get_documents(index_name=datasource, offset=0, limit=1,
@@ -1093,7 +1026,9 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
                         row.payload = None
                         db.commit()
 
-                _executor.submit(_run_enrichment_background, datasource, task, text)
+                from src.worker.kafka_producer import publish_task
+                publish_task({"task_type": "enrich_doc", "datasource": datasource,
+                              "doc_id": task, "text": text})
                 return {"status": "restarted", "task": task, "category": category}, 200
             else:
                 return {"error": f"Unknown task_category: {category}"}, 400
@@ -1154,32 +1089,29 @@ def task_refresh_handler(app, operation, request, **kwargs):
         try:
             from src.rag.insights_engine import get_insights_engine
             engine = get_insights_engine()
-            # Force trigger just that task by manually clearing its state and submitting
-            # (We can borrow internal methods to do this)
             current = engine._load_all_from_cache(datasource)
             sample_hash = "manual_refresh"
             if current and task in current:
                 sample_hash = current[task].get("sample_hash", "manual_refresh")
-                
+
             from src.rag.retriever import get_retriever
-            from src.config import Config
             import hashlib
             retriever = get_retriever()
             sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
             if sample:
                 doc_ids = sorted([str(d.get("id")) for d in sample])
                 sample_hash = hashlib.sha256(",".join(doc_ids).encode()).hexdigest()
-                
+
             engine._set_task_status(datasource, task, "pending", sample_hash, clear_data=True)
-            
-            from concurrent.futures import ThreadPoolExecutor
-            # Import the internal executor from insights_engine
-            from src.rag.insights_engine import _executor
+
+            from src.worker.kafka_producer import publish_task
             if task == "stats":
-                _executor.submit(engine._run_stats_task, datasource, sample_hash)
+                publish_task({"task_type": "insight_stats", "datasource": datasource,
+                              "sample_hash": sample_hash})
             else:
-                _executor.submit(engine._run_ai_task, datasource, task, sample, sample_hash)
-                
+                publish_task({"task_type": "insight_ai", "datasource": datasource,
+                              "insight_type": task, "sample_hash": sample_hash})
+
             return {"status": "restarted", "task": task}, 200
         except Exception as e:
             return {"error": str(e)}, 500

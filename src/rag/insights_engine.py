@@ -6,7 +6,7 @@ Samples the corpus and triggers multiple background tasks:
 3. AI Graph (Relationship detection)
 4. Data Statistics (Chart data from Elasticsearch)
 
-Uses ThreadPoolExecutor for lightweight background processing.
+Background work is routed through Kafka (or falls back to daemon threads).
 All HTTP-facing methods return immediately — heavy work runs in background.
 SSE subscribers receive push notifications as tasks complete.
 """
@@ -15,7 +15,6 @@ import json
 import queue
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Set
 
@@ -29,8 +28,6 @@ from src.rag.prompt_builder import PromptBuilder
 
 tracer = get_tracer()
 
-# Background worker pool (max 6 workers: stats + 3 AI tasks + enrichment slots)
-_executor = ThreadPoolExecutor(max_workers=6)
 _lock = threading.Lock()
 
 
@@ -132,8 +129,9 @@ class InsightsEngine:
                 for ttype in ["summary", "graph", "stats"]:
                     self._set_task_status(datasource, ttype, "pending", "coordinator_scheduled",
                                           clear_data=force_refresh)
-                # Run the heavy coordinator (ES sample fetch + task dispatch) in background
-                _executor.submit(self._run_coordinator, datasource)
+                # Route the coordinator through Kafka (or daemon thread fallback)
+                from src.worker.kafka_producer import publish_task
+                publish_task({"task_type": "insight_coordinator", "datasource": datasource})
                 current_insights = self._load_all_from_cache(datasource)
                 span.set_attribute("insights.refresh_triggered", True)
             else:
@@ -183,14 +181,17 @@ class InsightsEngine:
                 self._set_task_status(datasource, ttype, "error", "coordinator_failed", error=str(e))
 
     def _trigger_tasks(self, datasource: str, sample: List[dict], sample_hash: str):
-        """Submit all insight tasks to the executor."""
+        """Publish all insight sub-tasks to Kafka (or daemon thread fallback)."""
+        from src.worker.kafka_producer import publish_task
         tasks = ["summary", "graph", "stats"]
         for ttype in tasks:
             self._set_task_status(datasource, ttype, "pending", sample_hash, clear_data=True)
             if ttype == "stats":
-                _executor.submit(self._run_stats_task, datasource, sample_hash)
+                publish_task({"task_type": "insight_stats", "datasource": datasource,
+                              "sample_hash": sample_hash})
             else:
-                _executor.submit(self._run_ai_task, datasource, ttype, sample, sample_hash)
+                publish_task({"task_type": "insight_ai", "datasource": datasource,
+                              "insight_type": ttype, "sample_hash": sample_hash})
 
     def _run_ai_task(self, datasource: str, ttype: str, sample: List[dict], sample_hash: str):
         """Worker function for LLM tasks."""

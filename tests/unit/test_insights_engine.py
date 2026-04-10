@@ -10,26 +10,28 @@ def engine():
 
 def test_empty_response_on_no_docs(engine):
     """get_insights() should return immediately with pending state; the coordinator
-    runs in background and handles the no-docs case asynchronously.
+    is published via Kafka (or fallback thread) and handles the no-docs case asynchronously.
     """
     with patch.object(engine, "_load_all_from_cache", return_value={}):
         with patch.object(engine, "_set_task_status") as mock_status:
-            with patch("src.rag.insights_engine._executor") as mock_exec:
+            with patch("src.worker.kafka_producer.publish_task") as mock_publish:
                 resp = engine.get_insights("ds")
                 # The HTTP response should come back immediately with pending tasks
                 assert resp["_meta"]["refresh_triggered"] is True
-                # Coordinator must be submitted to the executor
-                mock_exec.submit.assert_called_once()
+                # Coordinator must be published to Kafka
+                mock_publish.assert_called_once()
 
 def test_trigger_tasks_initially(engine):
-    """When no cache exists, get_insights() should mark tasks pending and submit coordinator."""
+    """When no cache exists, get_insights() should mark tasks pending and publish coordinator."""
     with patch.object(engine, "_load_all_from_cache", return_value={}):
         with patch.object(engine, "_set_task_status"):
-            with patch("src.rag.insights_engine._executor") as mock_exec:
+            with patch("src.worker.kafka_producer.publish_task") as mock_publish:
                 resp = engine.get_insights("ds")
                 assert resp["_meta"]["refresh_triggered"] is True
-                # Coordinator submitted as background job
-                mock_exec.submit.assert_called_once_with(engine._run_coordinator, "ds")
+                # Coordinator published as Kafka task
+                mock_publish.assert_called_once_with(
+                    {"task_type": "insight_coordinator", "datasource": "ds"}
+                )
 
 def test_json_parsing_robustness(engine):
     raw = "Some text before ```json\n{\"key\": \"val\"}\n``` after"
