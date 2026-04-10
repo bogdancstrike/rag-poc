@@ -45,45 +45,86 @@ def _signal_handler(signum, frame):
 
 
 def _recover_dangling_tasks() -> None:
-    """Reset tasks stuck in 'processing' from a previous crash or restart.
+    """Requeue tasks left in 'pending' or 'processing' by a previous crash/restart.
 
-    - InsightsCache: reset to 'pending' and republish coordinator tasks so they
-      are picked up by the Kafka worker automatically.
-    - DocumentEnrichment: reset to 'error' (document text is not stored in the DB,
-      so we can't requeue automatically — the user can retry via the UI).
+    'pending' tasks had their Kafka messages already committed by the previous
+    consumer session, so they will never be delivered again — we must republish.
+    'processing' tasks were mid-execution when the process died.
+
+    - InsightsCache (both states): reset to 'pending' + republish coordinator.
+    - DocumentEnrichment processing: reset to 'error' (text not in DB; retry via UI).
+    - DocumentEnrichment pending: fetch text from ES and republish to Kafka.
     """
     try:
         from src.session.models import InsightsCache, DocumentEnrichment, get_db
         from src.worker.kafka_producer import publish_task
 
         with get_db() as db:
-            # ── Insights ──────────────────────────────────────────────────────
-            stuck_insights = db.query(InsightsCache).filter_by(status="processing").all()
-            requeued_ds: set[str] = set()
-            for row in stuck_insights:
+            # ── Insights: requeue pending + processing ─────────────────────
+            stuck = db.query(InsightsCache).filter(
+                InsightsCache.status.in_(["pending", "processing"])
+            ).all()
+            requeue_ds: set[str] = set()
+            for row in stuck:
                 row.status = "pending"
                 row.error = None
-                requeued_ds.add(row.datasource)
-            if stuck_insights:
+                requeue_ds.add(row.datasource)
+            if stuck:
                 db.commit()
-                for ds in requeued_ds:
+                for ds in requeue_ds:
                     publish_task({"task_type": "insight_coordinator", "datasource": ds})
                 logger.info(
-                    f"[QSINT-RAG] Requeued {len(stuck_insights)} dangling insight task(s) "
-                    f"across datasource(s): {', '.join(requeued_ds)}"
+                    f"[QSINT-RAG] Requeued {len(stuck)} insight task(s) "
+                    f"across: {', '.join(requeue_ds)}"
                 )
 
-            # ── Enrichment ────────────────────────────────────────────────────
-            stuck_enrichments = db.query(DocumentEnrichment).filter_by(status="processing").all()
-            for row in stuck_enrichments:
+            # ── Enrichment processing: mark error (no text stored) ─────────
+            processing = db.query(DocumentEnrichment).filter_by(status="processing").all()
+            for row in processing:
                 row.status = "error"
                 row.error = "Interrupted by app restart — please retry"
-            if stuck_enrichments:
+            if processing:
                 db.commit()
                 logger.info(
-                    f"[QSINT-RAG] Marked {len(stuck_enrichments)} dangling enrichment task(s) "
-                    f"as error (retry via UI)"
+                    f"[QSINT-RAG] Marked {len(processing)} in-progress enrichment(s) as error"
                 )
+
+            # ── Enrichment pending: fetch text from ES and republish ────────
+            pending = db.query(DocumentEnrichment).filter_by(status="pending").all()
+            pending_rows = [(r.doc_id, r.datasource) for r in pending]
+
+        if pending_rows:
+            from src.datasource.es_client import ESClient
+            client = ESClient()
+            requeued = 0
+            for doc_id, datasource in pending_rows:
+                try:
+                    docs, _ = client.get_documents(
+                        index_name=datasource, offset=0, limit=1, id_filter=[doc_id]
+                    )
+                    text = docs[0].get("text", "") if docs else ""
+                    if text:
+                        publish_task({
+                            "task_type": "enrich_doc",
+                            "datasource": datasource,
+                            "doc_id": doc_id,
+                            "text": text,
+                        })
+                        requeued += 1
+                    else:
+                        # No text found — mark as error so it doesn't dangle
+                        with get_db() as db:
+                            row = db.query(DocumentEnrichment).filter_by(
+                                doc_id=doc_id, datasource=datasource
+                            ).first()
+                            if row:
+                                row.status = "error"
+                                row.error = "Document text not found after restart"
+                                db.commit()
+                except Exception as e:
+                    logger.warning(f"[QSINT-RAG] Could not requeue enrichment {doc_id}: {e}")
+            if requeued:
+                logger.info(f"[QSINT-RAG] Requeued {requeued}/{len(pending_rows)} pending enrichment(s)")
 
     except Exception as e:
         logger.warning(f"[QSINT-RAG] Task recovery failed (non-fatal): {e}")

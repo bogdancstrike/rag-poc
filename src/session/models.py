@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import (
     Column, String, Integer, Text, DateTime, JSON,
-    ForeignKey, create_engine, Index, text
+    ForeignKey, create_engine, Index, text, event, exc as sa_exc
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -218,6 +218,20 @@ def get_engine():
         if Config.DATABASE_URL.startswith("postgresql"):
             kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_recycle": 300})
         _engine = create_engine(Config.DATABASE_URL, **kwargs)
+
+        @event.listens_for(_engine, "checkout")
+        def _validate_connection(dbapi_conn, conn_record, conn_proxy):
+            """Pessimistic checkout validation — discard connections in bad state.
+
+            pool_pre_ping catches dead connections (network-level), but not ones
+            stuck in a broken transaction (PGRES_TUPLES_OK error). This ping runs
+            on every checkout and raises DisconnectionError to force pool recycling.
+            """
+            try:
+                dbapi_conn.cursor().execute("SELECT 1")
+            except Exception:
+                raise sa_exc.DisconnectionError()
+
     return _engine
 
 
