@@ -1,5 +1,7 @@
-import { Typography, Collapse, Tag, Space, theme } from 'antd'
+import { Typography, Collapse, Tag, Space, theme, Button, Tooltip, Progress } from 'antd'
+import { LinkOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
+import { useNavigate } from 'react-router-dom'
 import type { Message } from '@/types'
 
 const { Text } = Typography
@@ -13,6 +15,7 @@ interface Props {
  */
 export function MessageBubble({ message }: Props) {
   const { token } = theme.useToken()
+  const navigate  = useNavigate()
   const isUser = message.role === 'user'
 
   const bubbleStyle: React.CSSProperties = {
@@ -91,30 +94,74 @@ export function MessageBubble({ message }: Props) {
               ),
               children: (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {message.sources.map((src, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        padding:      '6px 10px',
-                        background:   token.colorFillTertiary,
-                        borderRadius: token.borderRadius,
-                        fontSize:     11,
-                      }}
-                    >
-                      <Space>
-                        <Tag style={{ fontSize: 10, margin: 0 }} color="blue">
-                          {src.id.slice(0, 8)}
-                        </Tag>
-                        <Text style={{ fontSize: 10, color: token.colorTextDescription }}>
-                          score: {src.score?.toFixed(2)}
-                        </Text>
-                      </Space>
-                      <div style={{ color: token.colorTextSecondary, marginTop: 4, fontSize: 11 }}>
-                        {src.text?.slice(0, 180)}
-                        {(src.text?.length ?? 0) > 180 && '…'}
+                  {message.sources.map((src, i) => {
+                    const score    = src.score ?? 0
+                    const scoreColor = score >= 0.6 ? token.colorSuccess
+                      : score >= 0.3 ? token.colorWarning
+                      : token.colorError
+                    const datasource = src.datasource || ''
+                    const docId      = src.id || ''
+                    const canNavigate = !!(datasource && docId)
+                    return (
+                      <div
+                        key={i}
+                        style={{
+                          padding:      '8px 10px',
+                          background:   token.colorFillTertiary,
+                          borderRadius: token.borderRadius,
+                          fontSize:     11,
+                          borderLeft:   `3px solid ${scoreColor}`,
+                        }}
+                      >
+                        <Space style={{ width: '100%', justifyContent: 'space-between' }} align="start">
+                          <Space size={6} wrap>
+                            <Tag style={{ fontSize: 10, margin: 0 }} color="blue">
+                              #{i + 1}
+                            </Tag>
+                            {src.title && (
+                              <Text strong style={{ fontSize: 11 }}>{src.title}</Text>
+                            )}
+                            <Tooltip title={`Relevance score: ${score.toFixed(4)}`}>
+                              <Tag
+                                style={{ fontSize: 10, margin: 0 }}
+                                color={score >= 0.6 ? 'success' : score >= 0.3 ? 'warning' : 'error'}
+                              >
+                                {(score * 100).toFixed(1)}%
+                              </Tag>
+                            </Tooltip>
+                          </Space>
+                          {canNavigate && (
+                            <Tooltip title="Open in Data Exploration">
+                              <Button
+                                size="small"
+                                type="text"
+                                icon={<LinkOutlined />}
+                                style={{ fontSize: 11, height: 20, padding: '0 4px' }}
+                                onClick={() =>
+                                  navigate(
+                                    `/explore/${encodeURIComponent(datasource)}/${encodeURIComponent(docId)}`
+                                  )
+                                }
+                              >
+                                Go to doc
+                              </Button>
+                            </Tooltip>
+                          )}
+                        </Space>
+                        <Progress
+                          percent={Math.round(score * 100)}
+                          showInfo={false}
+                          size={[undefined, 2]}
+                          strokeColor={scoreColor}
+                          style={{ margin: '4px 0 4px' }}
+                        />
+                        <div style={{ color: token.colorTextSecondary, fontSize: 11 }}>
+                          {src.text?.slice(0, 220)}
+                          {(src.text?.length ?? 0) > 220 && '…'}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               ),
             }]}

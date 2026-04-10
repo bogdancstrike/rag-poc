@@ -82,20 +82,27 @@ class Message(Base):
 class InsightsCache(Base):
     """Granular cached insights and background tasks.
 
-    Instead of one monolithic payload, each insight type (summary, ner, stats, etc.)
-    is stored as its own row, allowing partial updates and background generation.
+    Each insight type (summary, ner, stats, etc.) is its own row, allowing
+    partial updates and independent background generation.
     """
     __tablename__ = "rag_insights_cache"
 
     datasource   = Column(String(100), primary_key=True, default="default")
-    insight_type = Column(String(50),  primary_key=True)  # "summary", "ner", "graph", "stats"
-    
-    status       = Column(String(20),  nullable=False, default="pending") # pending, processing, complete, error
+    insight_type = Column(String(50),  primary_key=True)  # "summary" | "ner" | "graph" | "stats"
+
+    status       = Column(String(20),  nullable=False, default="pending", index=True)
     payload      = Column(JSON,        nullable=True)
     error        = Column(Text,        nullable=True)
-    
-    generated_at = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc))
-    sample_hash  = Column(String(64),  nullable=True)
+
+    # Lifecycle timestamps
+    generated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    started_at   = Column(DateTime, nullable=True)   # when worker picked it up
+    updated_at   = Column(DateTime, nullable=False,
+                          default=lambda: datetime.now(timezone.utc),
+                          onupdate=lambda: datetime.now(timezone.utc))
+
+    retry_count  = Column(Integer,  nullable=False, default=0)
+    sample_hash  = Column(String(64), nullable=True)
 
     __table_args__ = (
         Index("ix_insights_datasource_type", "datasource", "insight_type"),
@@ -109,21 +116,32 @@ class InsightsCache(Base):
             "payload":      self.payload,
             "error":        self.error,
             "generated_at": self.generated_at.isoformat() if self.generated_at else None,
+            "started_at":   self.started_at.isoformat()   if self.started_at   else None,
+            "updated_at":   self.updated_at.isoformat()   if self.updated_at   else None,
+            "retry_count":  self.retry_count,
             "sample_hash":  self.sample_hash,
         }
 
+
 class DocumentEnrichment(Base):
-    """Cache for AI enrichment operations (sentiment, ner, classification) on a single document."""
+    """Cache for AI enrichment (sentiment, NER, classification, summary) on a single document."""
     __tablename__ = "rag_document_enrichment"
 
-    doc_id       = Column(String(255), primary_key=True)
-    datasource   = Column(String(100), primary_key=True)
-    
-    status       = Column(String(20),  nullable=False, default="pending") # pending, processing, complete, error
-    payload      = Column(JSON,        nullable=True)
-    error        = Column(Text,        nullable=True)
-    
-    generated_at = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc))
+    doc_id     = Column(String(255), primary_key=True)
+    datasource = Column(String(100), primary_key=True)
+
+    status  = Column(String(20), nullable=False, default="pending", index=True)
+    payload = Column(JSON,       nullable=True)
+    error   = Column(Text,       nullable=True)
+
+    # Lifecycle timestamps
+    generated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    started_at   = Column(DateTime, nullable=True)
+    updated_at   = Column(DateTime, nullable=False,
+                          default=lambda: datetime.now(timezone.utc),
+                          onupdate=lambda: datetime.now(timezone.utc))
+
+    retry_count  = Column(Integer, nullable=False, default=0)
 
     def to_dict(self):
         return {
@@ -133,6 +151,9 @@ class DocumentEnrichment(Base):
             "payload":      self.payload,
             "error":        self.error,
             "generated_at": self.generated_at.isoformat() if self.generated_at else None,
+            "started_at":   self.started_at.isoformat()   if self.started_at   else None,
+            "updated_at":   self.updated_at.isoformat()   if self.updated_at   else None,
+            "retry_count":  self.retry_count,
         }
 
 # ── Engine / session factory ───────────────────────────────────────────────────
@@ -158,25 +179,65 @@ def get_session_factory():
     return _SessionFactory
 
 
+def _add_column_if_missing(conn, table: str, column: str, definition: str) -> None:
+    """ALTER TABLE helper — silently skips if column already exists."""
+    conn.execute(text(
+        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}"
+    ))
+
+
 def init_db():
-    """Create all tables if they do not exist.
-    
-    In development, we detect if the insights table needs a schema migration.
+    """Create all tables and apply incremental schema migrations.
+
+    Uses IF NOT EXISTS / ADD COLUMN IF NOT EXISTS so it is safe to run on
+    every startup — no-ops when the schema is already current.
     """
     engine = get_engine()
-    
-    # Check if we need to drop the old insights table (schema migration)
     from sqlalchemy import inspect
     inspector = inspect(engine)
-    if "rag_insights_cache" in inspector.get_table_names():
-        columns = [c["name"] for c in inspector.get_columns("rag_insights_cache")]
-        if "insight_type" not in columns:
-            logger.warning("[db] Old rag_insights_cache detected — dropping for schema update")
+    existing_tables = inspector.get_table_names()
+
+    # ── Legacy migration: drop old single-column insights table ──────────────
+    if "rag_insights_cache" in existing_tables:
+        cols = [c["name"] for c in inspector.get_columns("rag_insights_cache")]
+        if "insight_type" not in cols:
+            logger.warning("[db] Old rag_insights_cache schema — dropping for rebuild")
             with engine.connect() as conn:
                 conn.execute(text("DROP TABLE IF EXISTS rag_insights_cache CASCADE"))
                 conn.commit()
 
+    # ── Create any missing tables ─────────────────────────────────────────────
     Base.metadata.create_all(bind=engine)
+
+    # ── Incremental column additions ──────────────────────────────────────────
+    with engine.connect() as conn:
+        # InsightsCache — new lifecycle columns
+        if "rag_insights_cache" in inspector.get_table_names():
+            ic_cols = [c["name"] for c in inspector.get_columns("rag_insights_cache")]
+            if "started_at" not in ic_cols:
+                _add_column_if_missing(conn, "rag_insights_cache", "started_at", "TIMESTAMP")
+            if "updated_at" not in ic_cols:
+                _add_column_if_missing(conn, "rag_insights_cache", "updated_at",
+                                       "TIMESTAMP NOT NULL DEFAULT NOW()")
+            if "retry_count" not in ic_cols:
+                _add_column_if_missing(conn, "rag_insights_cache", "retry_count",
+                                       "INTEGER NOT NULL DEFAULT 0")
+
+        # DocumentEnrichment — new lifecycle columns
+        if "rag_document_enrichment" in existing_tables:
+            de_cols = [c["name"] for c in inspector.get_columns("rag_document_enrichment")]
+            if "started_at" not in de_cols:
+                _add_column_if_missing(conn, "rag_document_enrichment", "started_at", "TIMESTAMP")
+            if "updated_at" not in de_cols:
+                _add_column_if_missing(conn, "rag_document_enrichment", "updated_at",
+                                       "TIMESTAMP NOT NULL DEFAULT NOW()")
+            if "retry_count" not in de_cols:
+                _add_column_if_missing(conn, "rag_document_enrichment", "retry_count",
+                                       "INTEGER NOT NULL DEFAULT 0")
+
+        conn.commit()
+
+    logger.info("[db] Schema up-to-date")
 
 
 @contextmanager

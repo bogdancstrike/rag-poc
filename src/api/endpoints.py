@@ -7,6 +7,7 @@ SSE streaming endpoints return a Flask Response object directly.
 """
 import json
 import uuid
+from datetime import datetime, timezone
 
 from flask import request as flask_request, Response, stream_with_context
 
@@ -79,6 +80,51 @@ def liveness(app, operation, request, **kwargs):
     return {"alive": True}, 200
 
 
+# ── Chat helpers ───────────────────────────────────────────────────────────────
+
+def _filter_chunks(chunks: list[dict]) -> list[dict]:
+    """Apply dynamic score threshold to retrieved chunks.
+
+    Strategy:
+    1. Drop any chunk whose score is below RAG_SCORE_THRESHOLD.
+    2. If ALL chunks are below the threshold (e.g. very poor retrieval), keep
+       the top RAG_MAX_CONTEXT_CHUNKS as a fallback so the LLM always has
+       something to work with.
+    3. Cap the final set at RAG_MAX_CONTEXT_CHUNKS.
+    """
+    threshold = Config.RAG_SCORE_THRESHOLD
+    max_k     = Config.RAG_MAX_CONTEXT_CHUNKS
+
+    if not chunks:
+        return []
+
+    filtered = [c for c in chunks if (c.get("score") or 0) >= threshold]
+
+    # Fallback: if filtering removed everything, keep the best ones anyway
+    if not filtered:
+        filtered = sorted(chunks, key=lambda c: c.get("score", 0), reverse=True)
+
+    return filtered[:max_k]
+
+
+def _format_sources(chunks: list[dict], datasource: str) -> list[dict]:
+    """Serialise retrieved chunks to the sources list stored with each message.
+
+    Returns full doc id, score, short text preview, datasource, and title so
+    the frontend can build a "Go To Document" link.
+    """
+    return [
+        {
+            "id":         c.get("id", ""),
+            "score":      round(c.get("score", 0), 4),
+            "text":       (c.get("text") or "")[:300],
+            "title":      c.get("title") or c.get("source") or "",
+            "datasource": datasource,
+        }
+        for c in chunks
+    ]
+
+
 # ── Chat (sync) ────────────────────────────────────────────────────────────────
 
 def chat_handler(app, operation, request, **kwargs):
@@ -114,10 +160,12 @@ def chat_handler(app, operation, request, **kwargs):
         # Persist user message
         append_message(session_id, "user", user_query)
 
-        # Retrieve context
-        retriever = get_retriever()
-        chunks    = retriever.retrieve(user_query, Config.RAG_TOP_K, index_name=datasource)
-        span.set_attribute("chat.chunks_retrieved", len(chunks))
+        # Retrieve context and apply dynamic score threshold
+        retriever    = get_retriever()
+        raw_chunks   = retriever.retrieve(user_query, Config.RAG_TOP_K, index_name=datasource)
+        chunks       = _filter_chunks(raw_chunks)
+        span.set_attribute("chat.chunks_retrieved", len(raw_chunks))
+        span.set_attribute("chat.chunks_used", len(chunks))
 
         # Load conversation history
         history = get_recent_messages(session_id, Config.HISTORY_TURNS)
@@ -136,9 +184,9 @@ def chat_handler(app, operation, request, **kwargs):
             span.set_attribute("chat.error", str(e))
             return {"error": f"LLM error: {str(e)}"}, 500
 
-        # Persist assistant answer
-        sources   = [{"id": c["id"], "score": c["score"], "text": c["text"][:200]} for c in chunks]
-        msg_dict  = append_message(session_id, "assistant", answer, sources=sources)
+        # Persist assistant answer — store full id, score, and short preview
+        sources  = _format_sources(chunks, datasource)
+        msg_dict = append_message(session_id, "assistant", answer, sources=sources)
 
         return {
             "session_id": session_id,
@@ -194,16 +242,18 @@ def chat_stream_handler(app, operation, request, **kwargs):
 
         append_message(session_id, "user", user_query)
 
-        retriever = get_retriever()
-        chunks    = retriever.retrieve(user_query, Config.RAG_TOP_K, index_name=datasource)
-        span.set_attribute("chat.chunks_retrieved", len(chunks))
+        retriever  = get_retriever()
+        raw_chunks = retriever.retrieve(user_query, Config.RAG_TOP_K, index_name=datasource)
+        chunks     = _filter_chunks(raw_chunks)
+        span.set_attribute("chat.chunks_retrieved", len(raw_chunks))
+        span.set_attribute("chat.chunks_used", len(chunks))
 
         history = get_recent_messages(session_id, Config.HISTORY_TURNS)
         history = [m for m in history if not (m["role"] == "user" and m["content"] == user_query)]
 
         builder  = PromptBuilder()
         messages, system = builder.build_chat_messages(user_query, chunks, history)
-        sources  = [{"id": c["id"], "score": c["score"], "text": c["text"][:200]} for c in chunks]
+        sources  = _format_sources(chunks, datasource)
 
     def generate():
         """Generator yielding SSE events while streaming from the LLM.
@@ -413,6 +463,29 @@ def documents_handler(app, operation, request, **kwargs):
             logger.error(f"[api] Error fetching documents: {e}")
             return {"error": str(e)}, 500
 
+def documents_enriched_handler(app, operation, request, **kwargs):
+    """GET /v1/documents/enriched — return doc_ids that have complete enrichment.
+
+    Query params: datasource (required)
+    Returns: { "doc_ids": ["id1", "id2", ...] }
+    """
+    from src.session.models import DocumentEnrichment, get_db
+    datasource = flask_request.args.get("datasource")
+    if not datasource:
+        return {"error": "datasource is required"}, 400
+
+    try:
+        with get_db() as db:
+            rows = db.query(DocumentEnrichment.doc_id).filter(
+                DocumentEnrichment.datasource == datasource,
+                DocumentEnrichment.status == "complete",
+            ).all()
+        return {"doc_ids": [r.doc_id for r in rows]}, 200
+    except Exception as e:
+        logger.error(f"[api] documents_enriched_handler error: {e}")
+        return {"error": str(e)}, 500
+
+
 def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
     """Background worker: run full document enrichment and persist result.
 
@@ -423,12 +496,13 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
     from src.rag.prompt_builder import PromptBuilder
     from src.rag.insights_engine import InsightsEngine
 
-    # Mark as processing
+    # Mark as processing and record started_at
     try:
         with get_db() as db:
             row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
             if row:
                 row.status = "processing"
+                row.started_at = datetime.now(timezone.utc)
                 db.commit()
     except Exception as e:
         logger.error(f"[enrich] DB pre-update failed: {e}")
@@ -791,4 +865,220 @@ def dashboard_tasks_handler(app, operation, request, **kwargs):
             return data, 200
         except Exception as e:
             logger.error(f"[api] Error fetching dashboard tasks: {e}")
+            return {"error": str(e)}, 500
+
+
+def tasks_list_handler(app, operation, request, **kwargs):
+    """GET /v1/tasks — unified, filterable, paginated task list.
+
+    Query params:
+        status       : pending | processing | complete | error  (default: all)
+        category     : insight | enrichment                     (default: all)
+        datasource   : string                                   (default: all)
+        task_type    : string (insight_type or "enrichment")    (default: all)
+        sort         : field:dir  e.g. updated_at:desc          (default: updated_at:desc)
+        page         : int                                      (default: 1)
+        size         : int  1-200                               (default: 50)
+        created_after  : ISO timestamp
+        created_before : ISO timestamp
+    """
+    from datetime import datetime, timezone
+    from src.session.models import InsightsCache, DocumentEnrichment, get_db
+
+    status_f     = flask_request.args.get("status", "")
+    category_f   = flask_request.args.get("category", "")
+    datasource_f = flask_request.args.get("datasource", "")
+    task_type_f  = flask_request.args.get("task_type", "")
+    sort_raw     = flask_request.args.get("sort", "updated_at:desc")
+    page         = max(1, int(flask_request.args.get("page", 1)))
+    size         = min(200, max(1, int(flask_request.args.get("size", 50))))
+    created_after_s  = flask_request.args.get("created_after", "")
+    created_before_s = flask_request.args.get("created_before", "")
+
+    # Parse sort param
+    SORTABLE = {"updated_at", "generated_at", "started_at", "status", "retry_count", "datasource"}
+    sort_field, sort_dir = "updated_at", "desc"
+    if ":" in sort_raw:
+        sf, sd = sort_raw.split(":", 1)
+        if sf in SORTABLE:
+            sort_field = sf
+            sort_dir = "asc" if sd == "asc" else "desc"
+
+    def _ts(s):
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    created_after  = _ts(created_after_s)
+    created_before = _ts(created_before_s)
+
+    with tracer.start_as_current_span("api.tasks.list"):
+        try:
+            tasks = []
+
+            with get_db() as db:
+                # ── Insight tasks ────────────────────────────────────────────
+                if not category_f or category_f == "insight":
+                    q = db.query(InsightsCache)
+                    if status_f:
+                        q = q.filter(InsightsCache.status == status_f)
+                    if datasource_f:
+                        q = q.filter(InsightsCache.datasource == datasource_f)
+                    if task_type_f and task_type_f != "enrichment":
+                        q = q.filter(InsightsCache.insight_type == task_type_f)
+                    if created_after:
+                        q = q.filter(InsightsCache.generated_at >= created_after)
+                    if created_before:
+                        q = q.filter(InsightsCache.generated_at <= created_before)
+
+                    for row in q.all():
+                        tasks.append({
+                            "id":          f"insight__{row.datasource}__{row.insight_type}",
+                            "category":    "insight",
+                            "task_type":   row.insight_type,
+                            "datasource":  row.datasource,
+                            "doc_id":      None,
+                            "status":      row.status,
+                            "retry_count": row.retry_count,
+                            "error":       row.error,
+                            "has_output":  bool(row.payload),
+                            "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+                            "started_at":   row.started_at.isoformat()   if row.started_at   else None,
+                            "updated_at":   (row.updated_at or row.generated_at).isoformat(),
+                            "sample_hash":  row.sample_hash,
+                        })
+
+                # ── Enrichment tasks ─────────────────────────────────────────
+                if not category_f or category_f == "enrichment":
+                    q = db.query(DocumentEnrichment)
+                    if status_f:
+                        q = q.filter(DocumentEnrichment.status == status_f)
+                    if datasource_f:
+                        q = q.filter(DocumentEnrichment.datasource == datasource_f)
+                    if task_type_f and task_type_f not in ("", "enrichment"):
+                        pass  # enrichment tasks don't have sub-types to filter by
+                    if created_after:
+                        q = q.filter(DocumentEnrichment.generated_at >= created_after)
+                    if created_before:
+                        q = q.filter(DocumentEnrichment.generated_at <= created_before)
+
+                    for row in q.all():
+                        tasks.append({
+                            "id":          f"enrichment__{row.datasource}__{row.doc_id}",
+                            "category":    "enrichment",
+                            "task_type":   "enrichment",
+                            "datasource":  row.datasource,
+                            "doc_id":      row.doc_id,
+                            "status":      row.status,
+                            "retry_count": row.retry_count,
+                            "error":       row.error,
+                            "has_output":  bool(row.payload),
+                            "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+                            "started_at":   row.started_at.isoformat()   if row.started_at   else None,
+                            "updated_at":   (row.updated_at or row.generated_at).isoformat(),
+                        })
+
+            # ── Sort ─────────────────────────────────────────────────────────
+            def _sort_key(t):
+                v = t.get(sort_field) or ""
+                return v
+
+            tasks.sort(key=_sort_key, reverse=(sort_dir == "desc"))
+
+            # ── Stats (computed pre-slice) ────────────────────────────────────
+            total = len(tasks)
+            stats = {
+                "total":      total,
+                "pending":    sum(1 for t in tasks if t["status"] == "pending"),
+                "processing": sum(1 for t in tasks if t["status"] == "processing"),
+                "complete":   sum(1 for t in tasks if t["status"] == "complete"),
+                "error":      sum(1 for t in tasks if t["status"] == "error"),
+                "insights":   sum(1 for t in tasks if t["category"] == "insight"),
+                "enrichments":sum(1 for t in tasks if t["category"] == "enrichment"),
+            }
+
+            # ── Paginate ──────────────────────────────────────────────────────
+            offset = (page - 1) * size
+            page_items = tasks[offset: offset + size]
+
+            return {
+                "tasks":  page_items,
+                "total":  total,
+                "page":   page,
+                "size":   size,
+                "stats":  stats,
+            }, 200
+
+        except Exception as e:
+            logger.error(f"[api] tasks_list_handler error: {e}", exc_info=True)
+            return {"error": str(e)}, 500
+
+
+def task_detail_handler(app, operation, request, task_id: str = "", **kwargs):
+    """GET /v1/tasks/<task_id> — single task detail by synthetic id.
+
+    task_id format: insight__{datasource}__{insight_type}
+                    enrichment__{datasource}__{doc_id}
+    """
+    from src.session.models import InsightsCache, DocumentEnrichment, get_db
+
+    parts = task_id.split("__", 2)
+    if len(parts) != 3:
+        return {"error": "Invalid task_id format"}, 400
+
+    category, datasource, key = parts
+
+    with tracer.start_as_current_span("api.tasks.detail"):
+        try:
+            with get_db() as db:
+                if category == "insight":
+                    row = db.query(InsightsCache).filter_by(
+                        datasource=datasource, insight_type=key
+                    ).first()
+                    if not row:
+                        return {"error": "Task not found"}, 404
+                    return {
+                        "id":          task_id,
+                        "category":    "insight",
+                        "task_type":   row.insight_type,
+                        "datasource":  row.datasource,
+                        "doc_id":      None,
+                        "status":      row.status,
+                        "retry_count": row.retry_count,
+                        "error":       row.error,
+                        "payload":     row.payload,
+                        "has_output":  bool(row.payload),
+                        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+                        "started_at":   row.started_at.isoformat()   if row.started_at   else None,
+                        "updated_at":   (row.updated_at or row.generated_at).isoformat(),
+                        "sample_hash":  row.sample_hash,
+                    }, 200
+
+                elif category == "enrichment":
+                    row = db.query(DocumentEnrichment).filter_by(
+                        datasource=datasource, doc_id=key
+                    ).first()
+                    if not row:
+                        return {"error": "Task not found"}, 404
+                    return {
+                        "id":          task_id,
+                        "category":    "enrichment",
+                        "task_type":   "enrichment",
+                        "datasource":  row.datasource,
+                        "doc_id":      row.doc_id,
+                        "status":      row.status,
+                        "retry_count": row.retry_count,
+                        "error":       row.error,
+                        "payload":     row.payload,
+                        "has_output":  bool(row.payload),
+                        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+                        "started_at":   row.started_at.isoformat()   if row.started_at   else None,
+                        "updated_at":   (row.updated_at or row.generated_at).isoformat(),
+                    }, 200
+                else:
+                    return {"error": "Unknown category"}, 400
+
+        except Exception as e:
+            logger.error(f"[api] task_detail_handler error: {e}", exc_info=True)
             return {"error": str(e)}, 500

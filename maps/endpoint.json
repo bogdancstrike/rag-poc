@@ -228,6 +228,39 @@
         "module_name": "api.endpoints",
         "method_name": "dashboard_task_clear_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_documents_enriched",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/documents/enriched",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "documents_enriched_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_tasks_list",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/tasks",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "tasks_list_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_task_detail",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/tasks/<task_id>",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "task_detail_handler"
+      }
     }
   ]
 }

@@ -2,12 +2,12 @@
  * RagModule — root component with react-router-dom based URL routing.
  *
  * Routes:
- *   /             → redirect to /dashboard
- *   /dashboard    → Platform Overview
- *   /explore/:idx → DataTable for a specific index (data mode)
- *   /ai/:idx      → InsightsPanel + Chat for a specific index (AI mode)
- *   /tasks        → Platform Overview (task list focused)
- *   /tasks/:id    → Task Detail page
+ *   /                      → redirect to /dashboard
+ *   /dashboard             → Platform Overview
+ *   /tasks                 → Task Monitor
+ *   /tasks/:id             → Task Detail
+ *   /index/:idx            → Index page (tabs: Data / Intelligence Report / RAG Chat)
+ *   /index/:idx/:docId     → Index page with document pinned
  */
 
 import { useState, useEffect } from 'react'
@@ -16,11 +16,11 @@ import {
 } from 'react-router-dom'
 import {
   ConfigProvider, Layout, theme as antTheme, Typography, Space,
-  Button, Tooltip, Menu, Spin, Alert, Switch, Tabs,
+  Button, Tooltip, Menu, Spin, Alert, Tabs,
 } from 'antd'
 import {
   BulbOutlined, MessageOutlined, BgColorsOutlined, DatabaseOutlined,
-  RobotOutlined, TableOutlined, DashboardOutlined,
+  DashboardOutlined, UnorderedListOutlined, TableOutlined,
 } from '@ant-design/icons'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useThemeStore } from '@/stores/themeStore'
@@ -30,6 +30,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel'
 import { DataTable } from '@/components/explore/DataTable'
 import { OverviewDashboard } from '@/components/dashboard/OverviewDashboard'
 import { TaskDetailPanel } from '@/components/dashboard/TaskDetailPanel'
+import { TasksPage } from '@/components/tasks/TasksPage'
 import { useIndices } from '@/hooks/useExplore'
 
 const { Header, Content, Sider } = Layout
@@ -52,14 +53,16 @@ function AppSidebar() {
   /** Derive the currently selected sidebar key from the URL. */
   const selectedKey = (() => {
     const path = location.pathname
-    if (path === '/' || path.startsWith('/dashboard') || path.startsWith('/tasks')) return '__dashboard__'
-    const m = path.match(/^\/(explore|ai)\/(.+)/)
-    if (m) return m[2]
+    if (path === '/' || path.startsWith('/dashboard')) return '__dashboard__'
+    if (path.startsWith('/tasks')) return '__tasks__'
+    const m = path.match(/^\/index\/([^/]+)/)
+    if (m) return decodeURIComponent(m[1])
     return ''
   })()
 
   const menuItems = [
     { key: '__dashboard__', icon: <DashboardOutlined />, label: 'Platform Overview' },
+    { key: '__tasks__', icon: <UnorderedListOutlined />, label: 'Task Monitor' },
     { type: 'divider' },
     ...(indices || []).map((idx) => ({
       key: idx,
@@ -69,11 +72,9 @@ function AppSidebar() {
   ]
 
   const handleSelect = ({ key }: { key: string }) => {
-    if (key === '__dashboard__') {
-      navigate('/dashboard')
-    } else {
-      navigate(`/explore/${encodeURIComponent(key)}`)
-    }
+    if (key === '__dashboard__') navigate('/dashboard')
+    else if (key === '__tasks__') navigate('/tasks')
+    else navigate(`/index/${encodeURIComponent(key)}`)
   }
 
   return (
@@ -113,12 +114,9 @@ function AppHeader() {
   const { mode, toggle } = useThemeStore()
   const location = useLocation()
 
-  /** Show the AI Mode toggle only on /explore and /ai routes. */
-  const navigate = useNavigate()
-  const isExplore = location.pathname.startsWith('/explore/')
-  const isAi = location.pathname.startsWith('/ai/')
-  const indexSlug = location.pathname.match(/^\/(explore|ai)\/(.+)/)?.[2] || ''
-  const decodedIndex = indexSlug ? decodeURIComponent(indexSlug) : ''
+  // Show current index name in header when on an index page
+  const indexMatch = location.pathname.match(/^\/index\/([^/]+)/)
+  const currentIndex = indexMatch ? decodeURIComponent(indexMatch[1]) : ''
 
   return (
     <Header
@@ -140,25 +138,13 @@ function AppHeader() {
         <Text style={{ fontSize: 11, color: token.colorTextDescription }}>
           Intelligence Platform
         </Text>
+        {currentIndex && (
+          <Text style={{ fontSize: 11, color: token.colorTextSecondary }}>
+            / {currentIndex}
+          </Text>
+        )}
       </Space>
       <Space size={16}>
-        {(isExplore || isAi) && decodedIndex && (
-          <Space>
-            <Text style={{ fontSize: 12, color: token.colorTextSecondary }}>
-              {decodedIndex}
-            </Text>
-            <Text strong style={{ fontSize: 12 }}>AI Mode</Text>
-            <Switch
-              checkedChildren={<RobotOutlined />}
-              unCheckedChildren={<TableOutlined />}
-              checked={isAi}
-              onChange={(v) => {
-                if (v) navigate(`/ai/${indexSlug}`)
-                else navigate(`/explore/${indexSlug}`)
-              }}
-            />
-          </Space>
-        )}
         <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
           <Button type="text" size="small" icon={<BgColorsOutlined />} onClick={toggle} />
         </Tooltip>
@@ -169,103 +155,51 @@ function AppHeader() {
 
 // ── Page views ─────────────────────────────────────────────────────────────
 
-/** Platform Overview + Task list at /dashboard */
+/** Platform Overview at /dashboard */
 function DashboardPage() {
   const navigate = useNavigate()
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
-      <OverviewDashboard
-        onSelectTask={(task, category) => {
-          const id = category === 'insight'
-            ? `insight__${task.datasource}__${task.insight_type}`
-            : `enrichment__${task.datasource}__${task.doc_id}`
-          navigate(`/tasks/${encodeURIComponent(id)}`, { state: { task, category } })
-        }}
-      />
+      <OverviewDashboard onGoToTasks={() => navigate('/tasks')} />
+    </div>
+  )
+}
+
+/** Task monitor at /tasks */
+function TasksPageWrapper() {
+  const navigate = useNavigate()
+  return (
+    <div style={{ height: '100%' }}>
+      <TasksPage onViewTask={(task) => navigate(`/tasks/${encodeURIComponent(task.id)}`)} />
     </div>
   )
 }
 
 /** Task detail page at /tasks/:id */
 function TaskDetailPage() {
-  const location = useLocation()
-  const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
-
-  const state = location.state as { task: any; category: 'insight' | 'enrichment' } | null
-
-  if (!state?.task) {
-    return (
-      <div style={{ padding: 32 }}>
-        <Alert
-          type="warning"
-          message="Task not found"
-          description="This task detail is not available. Please navigate from the Platform Overview."
-          action={<Button onClick={() => navigate('/dashboard')}>Go to Dashboard</Button>}
-        />
-      </div>
-    )
-  }
-
+  const navigate = useNavigate()
   return (
     <div style={{ height: '100%', overflowY: 'auto' }}>
       <TaskDetailPanel
-        task={state.task}
-        category={state.category}
-        onBack={() => navigate('/dashboard')}
+        taskId={id ? decodeURIComponent(id) : ''}
+        onBack={() => navigate('/tasks')}
       />
     </div>
   )
 }
 
-/** Raw data exploration at /explore/:index and /explore/:index/:docId */
-function ExplorePage() {
-  const { index, docId } = useParams<{ index: string; docId?: string }>()
+/** Index page at /index/:idx and /index/:idx/:docId — Data / Intelligence Report / RAG Chat */
+function IndexPage() {
+  const { idx, docId } = useParams<{ idx: string; docId?: string }>()
   const navigate = useNavigate()
-  const { setPendingQuery } = useSessionStore()
-
-  const datasource = index ? decodeURIComponent(index) : ''
-  const initialDocId = docId ? decodeURIComponent(docId) : undefined
-
-  const handleSendToRag = (docs: any[]) => {
-    const context = docs
-      .map((d) => `Title: ${d.title || '(untitled)'}\nContent: ${d.text || ''}`)
-      .join('\n\n')
-    const query = `Please analyze the following ${docs.length} document(s):\n\n${context}`
-    setPendingQuery(query)
-    navigate(`/ai/${encodeURIComponent(datasource)}`)
-  }
-
-  const handleDocSelect = (doc: any | null) => {
-    if (doc) {
-      navigate(`/explore/${encodeURIComponent(datasource)}/${encodeURIComponent(doc.id)}`, { replace: true })
-    } else {
-      navigate(`/explore/${encodeURIComponent(datasource)}`, { replace: true })
-    }
-  }
-
-  return (
-    <div style={{ height: '100%', padding: 16 }}>
-      <DataTable
-        datasource={datasource}
-        initialDocId={initialDocId}
-        onDocSelect={handleDocSelect}
-        onSendToRag={handleSendToRag}
-      />
-    </div>
-  )
-}
-
-/** AI mode (Insights + Chat) at /ai/:index */
-function AiPage() {
-  const { index } = useParams<{ index: string }>()
-  const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState<'insights' | 'chat'>('insights')
+  const [activeTab, setActiveTab] = useState<'data' | 'insights' | 'chat'>('data')
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
   const { pendingQuery: storePending, setPendingQuery: setStorePending } = useSessionStore()
   const { token } = antTheme.useToken()
 
-  const datasource = index ? decodeURIComponent(index) : ''
+  const datasource = idx ? decodeURIComponent(idx) : ''
+  const initialDocId = docId ? decodeURIComponent(docId) : undefined
 
   useEffect(() => {
     if (storePending) {
@@ -275,20 +209,47 @@ function AiPage() {
     }
   }, [storePending])
 
-  const handleAskAbout = (q: string) => {
-    setPendingQuery(q)
-    setActiveTab('chat')
+  const handleDocSelect = (doc: any | null) => {
+    if (doc) {
+      navigate(`/index/${encodeURIComponent(datasource)}/${encodeURIComponent(doc.id)}`, { replace: true })
+    } else {
+      navigate(`/index/${encodeURIComponent(datasource)}`, { replace: true })
+    }
   }
 
   const handleSendToRag = (docs: any[]) => {
     const context = docs
       .map((d) => `Title: ${d.title || '(untitled)'}\nContent: ${d.text || ''}`)
       .join('\n\n')
-    setPendingQuery(`Analyze the following:\n\n${context}`)
+    setPendingQuery(`Please analyze the following ${docs.length} document(s):\n\n${context}`)
+    setActiveTab('chat')
+  }
+
+  const handleAskAbout = (q: string) => {
+    setPendingQuery(q)
     setActiveTab('chat')
   }
 
   const tabItems = [
+    {
+      key: 'data',
+      label: (
+        <Space>
+          <TableOutlined />
+          Data Exploration
+        </Space>
+      ),
+      children: (
+        <div style={{ height: 'calc(100vh - 108px)', padding: 16, overflowY: 'auto' }}>
+          <DataTable
+            datasource={datasource}
+            initialDocId={initialDocId}
+            onDocSelect={handleDocSelect}
+            onSendToRag={handleSendToRag}
+          />
+        </div>
+      ),
+    },
     {
       key: 'insights',
       label: (
@@ -330,7 +291,7 @@ function AiPage() {
   return (
     <Tabs
       activeKey={activeTab}
-      onChange={(k) => setActiveTab(k as 'insights' | 'chat')}
+      onChange={(k) => setActiveTab(k as 'data' | 'insights' | 'chat')}
       items={tabItems}
       style={{ height: '100%' }}
       tabBarStyle={{
@@ -357,11 +318,10 @@ function AppShell() {
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/tasks" element={<DashboardPage />} />
+            <Route path="/tasks" element={<TasksPageWrapper />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
-            <Route path="/explore/:index" element={<ExplorePage />} />
-            <Route path="/explore/:index/:docId" element={<ExplorePage />} />
-            <Route path="/ai/:index" element={<AiPage />} />
+            <Route path="/index/:idx" element={<IndexPage />} />
+            <Route path="/index/:idx/:docId" element={<IndexPage />} />
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>

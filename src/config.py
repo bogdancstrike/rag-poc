@@ -33,8 +33,13 @@ class Config:
     LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
 
-    # Number of document chunks to retrieve per query
-    RAG_TOP_K = int(os.getenv("RAG_TOP_K", "8"))
+    # Number of document chunks to retrieve per query (upper bound)
+    RAG_TOP_K = int(os.getenv("RAG_TOP_K", "20"))
+    # Minimum relevance score — chunks below this threshold are discarded.
+    # Set to 0.0 to disable filtering (keep all retrieved chunks).
+    RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.15"))
+    # Max chunks passed to the LLM after score filtering
+    RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "8"))
     # Max conversation history turns injected into prompt
     HISTORY_TURNS = int(os.getenv("HISTORY_TURNS", "10"))
 

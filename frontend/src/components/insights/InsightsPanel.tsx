@@ -6,7 +6,7 @@ import {
   ReloadOutlined, FireOutlined, RiseOutlined, TeamOutlined, WarningOutlined,
   ClockCircleOutlined, SyncOutlined, BarChartOutlined, NodeIndexOutlined,
   DeleteOutlined, SendOutlined, TableOutlined, BulbOutlined, BookOutlined,
-  GlobalOutlined, AlertOutlined,
+  GlobalOutlined, AlertOutlined, MessageOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
@@ -348,9 +348,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                     borderLeft: `3px solid ${sentColor}`,
                     borderRadius: token.borderRadius,
                     padding: '8px 12px',
-                    cursor: 'pointer',
                   }}
-                  onClick={() => onAskAbout(`What can you tell me about "${t.topic}"?`)}
                 >
                   <Row align="middle" justify="space-between" wrap={false}>
                     <Space size={8} style={{ flex: 1, minWidth: 0 }}>
@@ -362,12 +360,23 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                         {t.sentiment?.toUpperCase() || 'N/A'}
                       </Tag>
                     </Space>
-                    <Space size={8} style={{ flexShrink: 0, marginLeft: 12 }}>
+                    <Space size={6} style={{ flexShrink: 0, marginLeft: 12 }}>
                       {t.count_estimate > 0 && (
                         <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
                           ~{t.count_estimate} mentions
                         </Text>
                       )}
+                      <Tooltip title={`Ask RAG Chat about "${t.topic}"`}>
+                        <Button
+                          size="small"
+                          type="primary"
+                          ghost
+                          icon={<MessageOutlined />}
+                          onClick={() => onAskAbout(`What can you tell me about "${t.topic}"? Include sentiment analysis, key actors, and any notable developments.`)}
+                        >
+                          Ask AI
+                        </Button>
+                      </Tooltip>
                     </Space>
                   </Row>
                   {t.summary && (
