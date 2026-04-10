@@ -3,6 +3,7 @@
 Supports both synchronous completion and streaming (for SSE endpoints).
 Uses the openai Python SDK with a custom base_url pointing at Ollama.
 """
+import re
 from typing import Generator
 
 from openai import OpenAI
@@ -12,6 +13,14 @@ from framework.tracing import get_tracer
 from src.config import Config
 
 tracer = get_tracer()
+
+# Qwen3 and other reasoning models may emit <think>...</think> blocks before
+# the actual response. Strip them so downstream JSON parsers don't choke.
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think_blocks(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
 
 
 class LLMClient:
@@ -40,7 +49,8 @@ class LLMClient:
         Returns:
             The assistant's reply as a plain string.
         """
-        full_messages = self._build_messages(messages, system)
+        no_think_system = (system.rstrip() + "\n/no_think") if system else "/no_think"
+        full_messages = self._build_messages(messages, no_think_system)
         with tracer.start_as_current_span("llm.complete") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
@@ -54,6 +64,7 @@ class LLMClient:
                     stream=False,
                 )
                 content = resp.choices[0].message.content or ""
+                content = _strip_think_blocks(content)
                 span.set_attribute("llm.response_length", len(content))
                 return content
             except Exception as e:
@@ -104,8 +115,15 @@ class LLMClient:
 
         Ollama respects the response_format param for models that support it.
         We ensure the system prompt is focused on JSON output.
+
+        For Qwen3-series models: thinking mode is suppressed via both the
+        /no_think system-prompt token (model-level, always works) and the
+        options.think=false Ollama parameter (API-level, requires Ollama ≥0.6).
         """
-        full_messages = self._build_messages(messages, system)
+        # Append /no_think to suppress Qwen3 reasoning tokens at the model level.
+        # Safe for all models — non-Qwen models ignore the token.
+        no_think_system = (system.rstrip() + "\n/no_think") if system else "/no_think"
+        full_messages = self._build_messages(messages, no_think_system)
         with tracer.start_as_current_span("llm.complete_json") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
@@ -117,10 +135,15 @@ class LLMClient:
                     temperature=0.0,   # Deterministic as possible for JSON
                     stream=False,
                     response_format={"type": "json_object"},
-                    # Ollama: expand context window to 16K so insights prompt fits
-                    extra_body={"options": {"num_ctx": 16384}},
+                    # Ollama: expand context window to 16K so insights prompt fits.
+                    # think=false disables Qwen3-style <think>...</think> reasoning
+                    # blocks that would otherwise wrap and break JSON output.
+                    extra_body={"options": {"num_ctx": 16384, "think": False}},
                 )
                 content = resp.choices[0].message.content or "{}"
+                # Strip any residual <think>...</think> blocks (Qwen3 / reasoning
+                # models may still emit them depending on Ollama version).
+                content = _strip_think_blocks(content)
                 span.set_attribute("llm.response_length", len(content))
                 return content
             except Exception as e:

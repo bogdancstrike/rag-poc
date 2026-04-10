@@ -770,8 +770,10 @@ def document_enrich_stream_handler(app, operation, request, **kwargs):
             # ── Step 1: Main LLM (summary + all structured fields) ───────────
             messages, system = builder.build_enrichment_messages(text[:3000])
             raw = llm.complete_json(messages, system)
+            logger.debug(f"[enrich_stream] raw LLM output (first 500): {raw[:500]!r}")
             step1 = InsightsEngine._parse_json(raw)
             if not step1:
+                logger.error(f"[enrich_stream] unparseable raw (full): {raw!r}")
                 raise ValueError("LLM returned unparseable JSON for main enrichment")
             accumulated.update(step1)
             yield f'data: {json.dumps({"type": "partial", "payload": dict(accumulated)})}\n\n'

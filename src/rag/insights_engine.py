@@ -399,7 +399,10 @@ class InsightsEngine:
         if not raw:
             return None
 
-        # Step 0: strip markdown code fences
+        # Step 0a: strip <think>...</think> reasoning blocks (Qwen3 / reasoning models)
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
+
+        # Step 0b: strip markdown code fences
         cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
 
         def _try(text: str) -> Optional[dict]:
