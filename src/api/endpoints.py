@@ -511,3 +511,15 @@ def task_refresh_handler(app, operation, request, **kwargs):
             return {"status": "restarted", "task": task}, 200
         except Exception as e:
             return {"error": str(e)}, 500
+
+def dashboard_tasks_handler(app, operation, request, **kwargs):
+    """GET /v1/dashboard/tasks — get platform-wide task status."""
+    with tracer.start_as_current_span("api.dashboard.tasks") as span:
+        try:
+            from src.rag.insights_engine import get_insights_engine
+            engine = get_insights_engine()
+            data = engine.get_all_tasks()
+            return data, 200
+        except Exception as e:
+            logger.error(f"[api] Error fetching dashboard tasks: {e}")
+            return {"error": str(e)}, 500

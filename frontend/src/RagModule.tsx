@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { ConfigProvider, Layout, theme as antTheme, Tabs, Typography, Space, Button, Tooltip, Menu, Spin, Alert, Switch } from 'antd'
 import {
   BulbOutlined, MessageOutlined, BgColorsOutlined, DatabaseOutlined, RobotOutlined,
-  TableOutlined
+  TableOutlined, DashboardOutlined
 } from '@ant-design/icons'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useThemeStore } from '@/stores/themeStore'
@@ -10,6 +10,7 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { InsightsPanel } from '@/components/insights/InsightsPanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { DataTable } from '@/components/explore/DataTable'
+import { OverviewDashboard } from '@/components/dashboard/OverviewDashboard'
 import { useIndices } from '@/hooks/useExplore'
 import { Document } from '@/api/explore'
 
@@ -33,7 +34,7 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
   const { mode, toggle } = useThemeStore()
 
   const { data: indices, isLoading: isLoadingIndices, error: indicesError } = useIndices()
-  const [datasource, setDatasource] = useState<string>('')
+  const [datasource, setDatasource] = useState<string>('__dashboard__')
   const [aiModes, setAiModes] = useState<Record<string, boolean>>(() => {
     try {
       const saved = localStorage.getItem('qsint_ai_modes')
@@ -54,13 +55,6 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
   const [activeTab, setActiveTab]       = useState<'insights' | 'chat'>('insights')
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
   const setStorePendingQuery            = useSessionStore((s) => s.setPendingQuery)
-
-  // Auto-select first index
-  useEffect(() => {
-    if (indices && indices.length > 0 && !datasource) {
-      setDatasource(indices[0])
-    }
-  }, [indices, datasource])
 
   const handleAskAbout = (question: string) => {
     setPendingQuery(question)
@@ -103,11 +97,19 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
     },
   ]
 
-  const menuItems = (indices || []).map(idx => ({
-    key: idx,
-    icon: <DatabaseOutlined />,
-    label: idx
-  }))
+  const menuItems = [
+    {
+      key: '__dashboard__',
+      icon: <DashboardOutlined />,
+      label: 'Platform Overview'
+    },
+    { type: 'divider' },
+    ...(indices || []).map(idx => ({
+      key: idx,
+      icon: <DatabaseOutlined />,
+      label: idx
+    }))
+  ]
 
   return (
     <Layout style={{ height, background: token.colorBgLayout }}>
@@ -133,7 +135,7 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
           </Text>
         </Space>
         <Space size={16}>
-          {datasource && (
+          {datasource && datasource !== '__dashboard__' && (
             <Space>
               <Text strong style={{ fontSize: 12 }}>AI Mode</Text>
               <Switch 
@@ -169,7 +171,7 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
               mode="inline"
               selectedKeys={[datasource]}
               onClick={(e) => setDatasource(e.key)}
-              items={menuItems}
+              items={menuItems as any}
               style={{ borderRight: 0 }}
             />
           )}
@@ -179,6 +181,10 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
           {!datasource ? (
             <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
               <Text type="secondary">Select an index from the sidebar to explore data.</Text>
+            </div>
+          ) : datasource === '__dashboard__' ? (
+            <div style={{ height: '100%', overflowY: 'auto' }}>
+              <OverviewDashboard />
             </div>
           ) : aiMode ? (
             <Tabs

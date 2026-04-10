@@ -173,6 +173,17 @@
         "module_name": "api.endpoints",
         "method_name": "task_refresh_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_dashboard_tasks",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/dashboard/tasks",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "dashboard_tasks_handler"
+      }
     }
   ]
 }

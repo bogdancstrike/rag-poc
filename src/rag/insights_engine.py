@@ -190,6 +190,33 @@ class InsightsEngine:
             logger.error(f"Failed to load insights: {e}")
             return {}
 
+    def get_all_tasks(self) -> dict:
+        """Return a platform-wide overview of all tasks (insights & enrichments)."""
+        from src.session.models import InsightsCache, DocumentEnrichment, get_db
+        try:
+            with get_db() as db:
+                insight_rows = db.query(InsightsCache).all()
+                enrich_rows = db.query(DocumentEnrichment).all()
+                
+                insights = [r.to_dict() for r in insight_rows]
+                enrichments = [r.to_dict() for r in enrich_rows]
+                
+                return {
+                    "insights": insights,
+                    "enrichments": enrichments,
+                    "summary": {
+                        "total_insights": len(insights),
+                        "total_enrichments": len(enrichments),
+                        "insights_pending": sum(1 for r in insights if r["status"] in ("pending", "processing")),
+                        "enrichments_pending": sum(1 for r in enrichments if r["status"] in ("pending", "processing")),
+                        "insights_error": sum(1 for r in insights if r["status"] == "error"),
+                        "enrichments_error": sum(1 for r in enrichments if r["status"] == "error"),
+                    }
+                }
+        except Exception as e:
+            logger.error(f"Failed to load all tasks: {e}")
+            return {"error": str(e)}
+
     def _set_task_status(self, datasource: str, ttype: str, status: str, sample_hash: str, payload=None, error=None, clear_data=False):
         from src.session.models import InsightsCache, get_db
         with _lock:
