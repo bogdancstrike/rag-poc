@@ -27,11 +27,12 @@ FORMAT RULES:
 1. Output ONLY valid JSON.
 2. The JSON must have EXACTLY this structure:
 {
-  "hot_topics": [{"topic": "string", "count_estimate": int, "summary": "string", "sentiment": "positive|negative|neutral|mixed"}],
-  "narratives": [{"title": "string", "description": "string", "evidence_docs": ["doc_id"]}],
+  "hot_topics": [{"topic": "string", "count_estimate": int, "summary": "string", "sentiment": "positive|negative|neutral|mixed|hostile"}],
+  "narratives": [{"title": "string", "description": "string", "evidence_docs": ["doc_title_or_keyword"]}],
   "trends": [{"label": "string", "direction": "rising|falling|stable", "change_pct": float, "time_period": "string"}]
 }
 3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
+4. Return UP TO 10 hot_topics (most significant first), UP TO 5 narratives (most impactful first), UP TO 10 trends.
 """
 
 INSIGHTS_NER_PROMPT = """Extract named entities from the provided documents.

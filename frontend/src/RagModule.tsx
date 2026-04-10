@@ -218,13 +218,14 @@ function TaskDetailPage() {
   )
 }
 
-/** Raw data exploration at /explore/:index */
+/** Raw data exploration at /explore/:index and /explore/:index/:docId */
 function ExplorePage() {
-  const { index } = useParams<{ index: string }>()
+  const { index, docId } = useParams<{ index: string; docId?: string }>()
   const navigate = useNavigate()
   const { setPendingQuery } = useSessionStore()
 
   const datasource = index ? decodeURIComponent(index) : ''
+  const initialDocId = docId ? decodeURIComponent(docId) : undefined
 
   const handleSendToRag = (docs: any[]) => {
     const context = docs
@@ -235,9 +236,22 @@ function ExplorePage() {
     navigate(`/ai/${encodeURIComponent(datasource)}`)
   }
 
+  const handleDocSelect = (doc: any | null) => {
+    if (doc) {
+      navigate(`/explore/${encodeURIComponent(datasource)}/${encodeURIComponent(doc.id)}`, { replace: true })
+    } else {
+      navigate(`/explore/${encodeURIComponent(datasource)}`, { replace: true })
+    }
+  }
+
   return (
     <div style={{ height: '100%', padding: 16 }}>
-      <DataTable datasource={datasource} onSendToRag={handleSendToRag} />
+      <DataTable
+        datasource={datasource}
+        initialDocId={initialDocId}
+        onDocSelect={handleDocSelect}
+        onSendToRag={handleSendToRag}
+      />
     </div>
   )
 }
@@ -346,6 +360,7 @@ function AppShell() {
             <Route path="/tasks" element={<DashboardPage />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
             <Route path="/explore/:index" element={<ExplorePage />} />
+            <Route path="/explore/:index/:docId" element={<ExplorePage />} />
             <Route path="/ai/:index" element={<AiPage />} />
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

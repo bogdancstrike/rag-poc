@@ -12,7 +12,6 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { useInsights, useRefreshInsights, useDeleteInsights, useRefreshTask } from '@/hooks/useInsights'
-import { TopicBubbleChart } from './TopicBubbleChart'
 import { TrendAreaChart } from './TrendAreaChart'
 import { EntityBarChart } from './EntityBarChart'
 import { RelationshipGraph } from './RelationshipGraph'
@@ -326,31 +325,69 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
         styles={{ body: { padding: '8px 16px 16px' } }}
       >
         {summaryTask.payload ? (
-          <Row gutter={[16, 12]}>
-            <Col xs={24} md={14}>
-              <TopicBubbleChart topics={summaryTask.payload.hot_topics || []} height={200} />
-            </Col>
-            <Col xs={24} md={10}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 8 }}>
-                {(summaryTask.payload.hot_topics || []).map((t: any, i: number) => (
-                  <Tooltip key={i} title={t.summary}>
-                    <Tag
-                      color={SENTIMENT_COLOR[t.sentiment] || 'default'}
-                      style={{ cursor: 'pointer', fontSize: 12, padding: '2px 8px' }}
-                      onClick={() => onAskAbout(`What can you tell me about "${t.topic}"?`)}
-                    >
-                      {t.topic}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(summaryTask.payload.hot_topics || []).slice(0, 10).map((t: any, i: number) => {
+              const sentColor =
+                t.sentiment === 'positive' ? token.colorSuccess :
+                t.sentiment === 'negative' || t.sentiment === 'hostile' ? token.colorError :
+                t.sentiment === 'mixed' ? token.colorWarning :
+                token.colorTextSecondary
+              const bgColor =
+                t.sentiment === 'positive' ? 'rgba(82,196,26,0.06)' :
+                t.sentiment === 'negative' || t.sentiment === 'hostile' ? 'rgba(255,77,79,0.06)' :
+                t.sentiment === 'mixed' ? 'rgba(250,173,20,0.06)' :
+                token.colorFillAlter
+              const max = Math.max(...(summaryTask.payload.hot_topics || []).map((x: any) => x.count_estimate || 0), 1)
+              const pct = Math.round(((t.count_estimate || 0) / max) * 100)
+              return (
+                <div
+                  key={i}
+                  style={{
+                    background: bgColor,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderLeft: `3px solid ${sentColor}`,
+                    borderRadius: token.borderRadius,
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => onAskAbout(`What can you tell me about "${t.topic}"?`)}
+                >
+                  <Row align="middle" justify="space-between" wrap={false}>
+                    <Space size={8} style={{ flex: 1, minWidth: 0 }}>
+                      <Text strong style={{ fontSize: 13 }}>{t.topic}</Text>
+                      <Tag
+                        color={SENTIMENT_COLOR[t.sentiment] || 'default'}
+                        style={{ fontSize: 10, margin: 0, flexShrink: 0 }}
+                      >
+                        {t.sentiment?.toUpperCase() || 'N/A'}
+                      </Tag>
+                    </Space>
+                    <Space size={8} style={{ flexShrink: 0, marginLeft: 12 }}>
                       {t.count_estimate > 0 && (
-                        <span style={{ marginLeft: 4, opacity: 0.6, fontSize: 10 }}>
-                          ×{t.count_estimate}
-                        </span>
+                        <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                          ~{t.count_estimate} mentions
+                        </Text>
                       )}
-                    </Tag>
-                  </Tooltip>
-                ))}
-              </div>
-            </Col>
-          </Row>
+                    </Space>
+                  </Row>
+                  {t.summary && (
+                    <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                      {t.summary}
+                    </Text>
+                  )}
+                  {pct > 0 && (
+                    <Progress
+                      percent={pct}
+                      showInfo={false}
+                      size={[undefined, 3]}
+                      strokeColor={sentColor}
+                      style={{ marginTop: 6, marginBottom: 0 }}
+                    />
+                  )}
+                </div>
+              )
+            })}
+          </div>
         ) : renderLoading()}
       </Card>
 
@@ -366,7 +403,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
           summaryTask.payload.narratives?.length > 0 ? (
             <List
               size="small"
-              dataSource={summaryTask.payload.narratives || []}
+              dataSource={(summaryTask.payload.narratives || []).slice(0, 5)}
               renderItem={(narrative: any, i: number) => (
                 <List.Item
                   key={i}
@@ -419,44 +456,47 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
           <div>
             <TrendAreaChart trends={summaryTask.payload.trends || []} height={180} />
             {summaryTask.payload.trends?.length > 0 && (
-              <Row gutter={12} style={{ marginTop: 12 }}>
-                {(summaryTask.payload.trends || []).slice(0, 4).map((t: any, i: number) => (
-                  <Col key={i} span={6}>
-                    <div style={{
-                      background: token.colorFillAlter,
-                      borderRadius: token.borderRadius,
-                      padding: '8px 10px',
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                    }}>
-                      <Text style={{ fontSize: 11 }}>
-                        {DIRECTION_ICON[t.direction]} {t.label}
-                      </Text>
-                      {t.change_pct !== undefined && (
-                        <div>
+              <Row gutter={[10, 10]} style={{ marginTop: 12 }}>
+                {(summaryTask.payload.trends || []).slice(0, 10).map((t: any, i: number) => {
+                  const trendColor =
+                    t.direction === 'rising' ? token.colorSuccess :
+                    t.direction === 'falling' ? token.colorError :
+                    token.colorTextSecondary
+                  return (
+                    <Col key={i} xs={12} sm={8} md={6} lg={4}>
+                      <div style={{
+                        background: token.colorFillAlter,
+                        borderRadius: token.borderRadius,
+                        padding: '8px 10px',
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        borderTop: `3px solid ${trendColor}`,
+                        height: '100%',
+                      }}>
+                        <Text style={{ fontSize: 11, display: 'block', lineHeight: 1.3 }}>
+                          {DIRECTION_ICON[t.direction]} {t.label}
+                        </Text>
+                        {t.change_pct !== undefined && (
                           <Text
                             style={{
-                              fontSize: 13,
-                              fontWeight: 600,
-                              color:
-                                t.direction === 'rising'
-                                  ? token.colorSuccess
-                                  : t.direction === 'falling'
-                                  ? token.colorError
-                                  : token.colorTextSecondary,
+                              fontSize: 15,
+                              fontWeight: 700,
+                              color: trendColor,
+                              display: 'block',
+                              marginTop: 4,
                             }}
                           >
                             {t.change_pct > 0 ? '+' : ''}{t.change_pct?.toFixed(1)}%
                           </Text>
-                          {t.time_period && (
-                            <Text type="secondary" style={{ fontSize: 10, display: 'block' }}>
-                              {t.time_period}
-                            </Text>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </Col>
-                ))}
+                        )}
+                        {t.time_period && (
+                          <Text type="secondary" style={{ fontSize: 10, display: 'block' }}>
+                            {t.time_period}
+                          </Text>
+                        )}
+                      </div>
+                    </Col>
+                  )
+                })}
               </Row>
             )}
           </div>
