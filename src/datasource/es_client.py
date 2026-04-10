@@ -81,8 +81,16 @@ class ESClient:
             return self._hybrid_search(query, top_k, idx)
         return self._keyword_search(query, top_k, idx)
 
+    # ES query_string / multi_match clause limit. Queries longer than this
+    # cause "Term too complex" errors with fuzziness enabled.
+    _MAX_QUERY_LEN = 512
+
     def _keyword_search(self, query: str, top_k: int, index_name: str) -> list[dict]:
         """Standard multi-field BM25 search across text-like fields."""
+        # Truncate long queries (e.g. user pasted a full document into chat).
+        # Fuzziness is intentionally omitted: it amplifies clause-count on long
+        # inputs and is not useful for intelligence document retrieval.
+        q = query[:self._MAX_QUERY_LEN]
         try:
             resp = self._client.search(
                 index=index_name,
@@ -90,10 +98,9 @@ class ESClient:
                     "size": top_k,
                     "query": {
                         "multi_match": {
-                            "query":  query,
+                            "query":  q,
                             "fields": ["text^3", "title^2", "content^2", "*"],
                             "type":   "best_fields",
-                            "fuzziness": "AUTO",
                         }
                     },
                     "_source": True,
