@@ -94,7 +94,7 @@ class PromptBuilder:
 
         messages = [{
             "role": "user",
-            "content": f"Analyse these {len(sample_docs)} documents and output structured JSON for {task_type}.\n\nREQUIRED SCHEMA:\n{system_prompt}\n\nDocuments:\n{doc_texts}",
+            "content": f"Documents:\n{doc_texts}\n\n---\nAnalyse the above {len(sample_docs)} documents and output structured JSON for {task_type}.\n\nREQUIRED SCHEMA (You MUST output ONLY valid JSON matching this exact structure):\n{system_prompt}",
         }]
 
         return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."

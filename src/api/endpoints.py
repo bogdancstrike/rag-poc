@@ -97,20 +97,26 @@ def chat_handler(app, operation, request, **kwargs):
 
         # Create session if not provided
         if not session_id:
-            session    = create_session()
+            datasource = body.get("datasource", "default")
+            session    = create_session(datasource=datasource)
             session_id = session["id"]
-        elif not get_session(session_id):
-            return {"error": f"Session {session_id} not found"}, 404
+        else:
+            session = get_session(session_id)
+            if not session:
+                return {"error": f"Session {session_id} not found"}, 404
+
+        datasource = session.get("datasource", "default")
 
         span.set_attribute("chat.session_id", session_id)
         span.set_attribute("chat.query_length", len(user_query))
+        span.set_attribute("chat.datasource", datasource)
 
         # Persist user message
         append_message(session_id, "user", user_query)
 
         # Retrieve context
         retriever = get_retriever()
-        chunks    = retriever.retrieve(user_query, Config.RAG_TOP_K)
+        chunks    = retriever.retrieve(user_query, Config.RAG_TOP_K, index_name=datasource)
         span.set_attribute("chat.chunks_retrieved", len(chunks))
 
         # Load conversation history
@@ -167,23 +173,29 @@ def chat_stream_handler(app, operation, request, **kwargs):
 
     # Create or validate session before streaming starts
     if not session_id:
-        session    = create_session()
+        datasource = body.get("datasource", "default")
+        session    = create_session(datasource=datasource)
         session_id = session["id"]
-    elif not get_session(session_id):
-        def _err():
-            yield f'data: {json.dumps({"type": "error", "content": f"Session {session_id} not found"})}\n\n'
-        return Response(stream_with_context(_err()), mimetype="text/event-stream",
-                        headers=_cors_headers())
+    else:
+        session = get_session(session_id)
+        if not session:
+            def _err():
+                yield f'data: {json.dumps({"type": "error", "content": f"Session {session_id} not found"})}\n\n'
+            return Response(stream_with_context(_err()), mimetype="text/event-stream",
+                            headers=_cors_headers())
+
+    datasource = session.get("datasource", "default")
 
     # Pre-flight: retrieve + history traced before the streaming generator starts
     with tracer.start_as_current_span("api.chat_stream.preflight") as span:
         span.set_attribute("chat.session_id", session_id)
         span.set_attribute("chat.query_length", len(user_query))
+        span.set_attribute("chat.datasource", datasource)
 
         append_message(session_id, "user", user_query)
 
         retriever = get_retriever()
-        chunks    = retriever.retrieve(user_query, Config.RAG_TOP_K)
+        chunks    = retriever.retrieve(user_query, Config.RAG_TOP_K, index_name=datasource)
         span.set_attribute("chat.chunks_retrieved", len(chunks))
 
         history = get_recent_messages(session_id, Config.HISTORY_TURNS)
@@ -364,9 +376,39 @@ def session_messages_handler(app, operation, request, **kwargs):
 
 def datasource_status_handler(app, operation, request, **kwargs):
     """GET /v1/datasource/status — return connectivity info for the active datasource."""
+    datasource = flask_request.args.get("datasource")
     with tracer.start_as_current_span("api.datasource.status") as span:
         retriever = get_retriever()
-        status    = retriever.get_status()
+        status    = retriever.get_status(index_name=datasource)
         span.set_attribute("datasource.type", status.get("type", "unknown"))
         span.set_attribute("datasource.error", str(status.get("error", "")))
         return status, 200
+
+def datasource_indices_handler(app, operation, request, **kwargs):
+    """GET /v1/datasource/indices — return a list of available indices."""
+    with tracer.start_as_current_span("api.datasource.indices") as span:
+        try:
+            from src.datasource.es_client import ESClient
+            client = ESClient()
+            indices = client.list_indices()
+            return {"indices": indices}, 200
+        except Exception as e:
+            logger.error(f"[api] Error fetching indices: {e}")
+            return {"error": str(e)}, 500
+
+def documents_handler(app, operation, request, **kwargs):
+    """GET /v1/documents — get raw documents for tabular view."""
+    datasource = flask_request.args.get("datasource")
+    query = flask_request.args.get("query", "")
+    offset = int(flask_request.args.get("offset", 0))
+    limit = int(flask_request.args.get("limit", 50))
+    
+    with tracer.start_as_current_span("api.documents") as span:
+        try:
+            from src.datasource.es_client import ESClient
+            client = ESClient()
+            docs, total = client.get_documents(index_name=datasource, offset=offset, limit=limit, query=query)
+            return {"documents": docs, "total": total}, 200
+        except Exception as e:
+            logger.error(f"[api] Error fetching documents: {e}")
+            return {"error": str(e)}, 500

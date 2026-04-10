@@ -21,10 +21,10 @@ class ESClient:
         if Config.ES_USER and Config.ES_PASSWORD:
             kwargs["basic_auth"] = (Config.ES_USER, Config.ES_PASSWORD)
         self._client = Elasticsearch(**kwargs)
-        self._index  = Config.ES_INDEX
-        self._has_vector: Optional[bool] = None   # lazily detected
+        self._default_index = Config.ES_INDEX
+        self._has_vector_cache = {}  # lazily detected per index
 
-    # ── Connectivity ────────────────────────────────────────────────────────────
+    # ── Connectivity & Indices ──────────────────────────────────────────────────
 
     def test_connection(self) -> bool:
         """Return True if the ES cluster is reachable."""
@@ -34,49 +34,58 @@ class ESClient:
             logger.warning(f"[es] Connection test failed: {e}")
             return False
 
-    def get_index_stats(self) -> dict:
-        """Return doc count, field names, and cluster health for the index."""
+    def list_indices(self, pattern: str = "qsint_docs*") -> list[str]:
+        """Return a list of available indices matching a pattern."""
         try:
-            info    = self._client.indices.stats(index=self._index)
-            mapping = self._client.indices.get_mapping(index=self._index)
+            indices = self._client.indices.get_alias(index=pattern)
+            return sorted(list(indices.keys()))
+        except NotFoundError:
+            return []
+        except Exception as e:
+            logger.error(f"[es] list_indices error: {e}")
+            return []
+
+    def get_index_stats(self, index_name: str = None) -> dict:
+        """Return doc count, field names, and cluster health for the index."""
+        idx = index_name or self._default_index
+        try:
+            info    = self._client.indices.stats(index=idx)
+            mapping = self._client.indices.get_mapping(index=idx)
             health  = self._client.cluster.health()
             doc_count = info["_all"]["primaries"]["docs"]["count"]
             fields = list(
-                mapping.get(self._index, {})
+                mapping.get(idx, {})
                 .get("mappings", {})
                 .get("properties", {})
                 .keys()
             )
             return {
-                "index":       self._index,
+                "index":       idx,
                 "doc_count":   doc_count,
                 "fields":      fields,
                 "status":      health.get("status", "unknown"),
-                "has_vector":  self._check_vector_field(),
+                "has_vector":  self._check_vector_field(idx),
             }
         except NotFoundError:
-            return {"index": self._index, "doc_count": 0, "fields": [], "status": "missing"}
+            return {"index": idx, "doc_count": 0, "fields": [], "status": "missing"}
         except Exception as e:
             logger.error(f"[es] get_index_stats error: {e}")
             return {"error": str(e)}
 
     # ── Search ──────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, top_k: int = 8) -> list[dict]:
-        """Search the index and return normalised chunk dicts.
+    def search(self, query: str, top_k: int = 8, index_name: str = None) -> list[dict]:
+        """Search the index and return normalised chunk dicts."""
+        idx = index_name or self._default_index
+        if self._check_vector_field(idx):
+            return self._hybrid_search(query, top_k, idx)
+        return self._keyword_search(query, top_k, idx)
 
-        Uses hybrid BM25+KNN when a vector field is present, pure BM25 otherwise.
-        Each result: {id, text, score, source, metadata}
-        """
-        if self._check_vector_field():
-            return self._hybrid_search(query, top_k)
-        return self._keyword_search(query, top_k)
-
-    def _keyword_search(self, query: str, top_k: int) -> list[dict]:
+    def _keyword_search(self, query: str, top_k: int, index_name: str) -> list[dict]:
         """Standard multi-field BM25 search across text-like fields."""
         try:
             resp = self._client.search(
-                index=self._index,
+                index=index_name,
                 body={
                     "size": top_k,
                     "query": {
@@ -95,13 +104,9 @@ class ESClient:
             logger.error(f"[es] keyword search error: {e}")
             return []
 
-    def _hybrid_search(self, query: str, top_k: int) -> list[dict]:
-        """BM25 search only (KNN requires embeddings generation pipeline).
-
-        Placeholder — when an embedding endpoint is configured, replace
-        the body with a combined knn + query clause for true hybrid search.
-        """
-        return self._keyword_search(query, top_k)
+    def _hybrid_search(self, query: str, top_k: int, index_name: str) -> list[dict]:
+        """BM25 search only (KNN requires embeddings generation pipeline)."""
+        return self._keyword_search(query, top_k, index_name)
 
     def _normalise_hits(self, hits: list) -> list[dict]:
         """Convert raw ES hits to the common {id, text, score, source, metadata} shape."""
@@ -126,14 +131,12 @@ class ESClient:
 
     # ── Sampling ────────────────────────────────────────────────────────────────
 
-    def get_sample_docs(self, n: int = 200) -> list[dict]:
-        """Return up to n sampled documents for insights generation.
-        
-        Uses a fixed seed and _seq_no to ensure stable, efficient sampling.
-        """
+    def get_sample_docs(self, n: int = 200, index_name: str = None) -> list[dict]:
+        """Return up to n sampled documents for insights generation."""
+        idx = index_name or self._default_index
         try:
             resp = self._client.search(
-                index=self._index,
+                index=idx,
                 body={
                     "size": min(n, 1000),
                     "query": {
@@ -155,41 +158,77 @@ class ESClient:
             logger.error(f"[es] sample error: {e}")
             return []
 
+    # ── Raw Documents ───────────────────────────────────────────────────────────
+    def get_documents(self, index_name: str = None, offset: int = 0, limit: int = 50, query: str = None) -> tuple[list[dict], int]:
+        """Get raw documents for tabular exploration. Returns (docs, total_count)."""
+        idx = index_name or self._default_index
+        try:
+            body = {
+                "from": offset,
+                "size": limit,
+                "_source": True,
+                "sort": [{"created_at": {"order": "desc", "unmapped_type": "date"}}]
+            }
+            if query:
+                body["query"] = {
+                    "multi_match": {
+                        "query": query,
+                        "fields": ["*"],
+                        "type": "best_fields",
+                        "fuzziness": "AUTO"
+                    }
+                }
+            else:
+                body["query"] = {"match_all": {}}
+
+            resp = self._client.search(index=idx, body=body)
+            hits = resp["hits"]["hits"]
+            total = resp["hits"]["total"]["value"]
+            docs = [{"id": hit["_id"], **hit["_source"]} for hit in hits]
+            return docs, total
+        except Exception as e:
+            logger.error(f"[es] get_documents error: {e}")
+            return [], 0
+
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
-    def _check_vector_field(self) -> bool:
+    def _check_vector_field(self, index_name: str) -> bool:
         """Detect whether the index has a dense_vector field (cached)."""
-        if self._has_vector is not None:
-            return self._has_vector
+        if index_name in self._has_vector_cache:
+            return self._has_vector_cache[index_name]
         try:
-            mapping = self._client.indices.get_mapping(index=self._index)
+            mapping = self._client.indices.get_mapping(index=index_name)
             props   = (
-                mapping.get(self._index, {})
+                mapping.get(index_name, {})
                 .get("mappings", {})
                 .get("properties", {})
             )
-            self._has_vector = any(
+            has_vector = any(
                 v.get("type") == "dense_vector" for v in props.values()
             )
+            self._has_vector_cache[index_name] = has_vector
+            return has_vector
         except Exception:
-            self._has_vector = False
-        return self._has_vector
+            self._has_vector_cache[index_name] = False
+            return False
 
-    def index_document(self, doc_id: str, body: dict) -> bool:
+    def index_document(self, doc_id: str, body: dict, index_name: str = None) -> bool:
         """Index (upsert) a single document. Used by seed scripts and tests."""
+        idx = index_name or self._default_index
         try:
-            self._client.index(index=self._index, id=doc_id, document=body)
+            self._client.index(index=idx, id=doc_id, document=body)
             return True
         except Exception as e:
             logger.error(f"[es] index_document error: {e}")
             return False
 
-    def ensure_index(self) -> None:
+    def ensure_index(self, index_name: str = None) -> None:
         """Create the index with basic mappings if it does not exist."""
-        if self._client.indices.exists(index=self._index):
+        idx = index_name or self._default_index
+        if self._client.indices.exists(index=idx):
             return
         self._client.indices.create(
-            index=self._index,
+            index=idx,
             body={
                 "mappings": {
                     "properties": {
@@ -202,4 +241,4 @@ class ESClient:
                 }
             },
         )
-        logger.info(f"[es] Created index '{self._index}'")
+        logger.info(f"[es] Created index '{idx}'")

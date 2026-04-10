@@ -33,26 +33,20 @@ class Retriever:
 
     # ── Public API ──────────────────────────────────────────────────────────────
 
-    def retrieve(self, query: str, top_k: int = None) -> list[dict]:
-        """Retrieve the most relevant document chunks for a query.
-
-        Args:
-            query:  Free-text user query or keyword.
-            top_k:  Number of chunks to return (default: Config.RAG_TOP_K).
-
-        Returns:
-            List of dicts: {id, text, score, source, metadata}
-        """
+    def retrieve(self, query: str, top_k: int = None, index_name: str = None) -> list[dict]:
+        """Retrieve the most relevant document chunks for a query."""
         k = top_k or Config.RAG_TOP_K
         with tracer.start_as_current_span("rag.retrieve") as span:
             span.set_attribute("retrieve.query_length", len(query))
             span.set_attribute("retrieve.top_k", k)
             span.set_attribute("retrieve.backend", "file" if self._file_loader else "elasticsearch")
+            if index_name:
+                span.set_attribute("retrieve.index_name", index_name)
             try:
                 if self._file_loader:
                     results = self._file_loader.search(query, k)
                 elif self._es_client:
-                    results = self._es_client.search(query, k)
+                    results = self._es_client.search(query, k, index_name=index_name)
                 else:
                     results = []
                 span.set_attribute("retrieve.results_count", len(results))
@@ -62,17 +56,19 @@ class Retriever:
                 span.set_attribute("retrieve.error", str(e))
                 return []
 
-    def get_sample(self, n: int = None) -> list[dict]:
+    def get_sample(self, n: int = None, index_name: str = None) -> list[dict]:
         """Return a random sample of documents for insights generation."""
         count = n or Config.INSIGHTS_MAX_DOCS
         with tracer.start_as_current_span("rag.sample") as span:
             span.set_attribute("sample.count_requested", count)
             span.set_attribute("sample.backend", "file" if self._file_loader else "elasticsearch")
+            if index_name:
+                span.set_attribute("sample.index_name", index_name)
             try:
                 if self._file_loader:
                     results = self._file_loader.get_sample(count)
                 elif self._es_client:
-                    results = self._es_client.get_sample_docs(count)
+                    results = self._es_client.get_sample_docs(count, index_name=index_name)
                 else:
                     results = []
                 span.set_attribute("sample.count_returned", len(results))
@@ -82,13 +78,13 @@ class Retriever:
                 span.set_attribute("sample.error", str(e))
                 return []
 
-    def get_status(self) -> dict:
+    def get_status(self, index_name: str = None) -> dict:
         """Return connectivity / stats info about the active datasource."""
         try:
             if self._file_loader:
                 return {"type": "file", **self._file_loader.get_stats()}
             if self._es_client:
-                return {"type": "elasticsearch", **self._es_client.get_index_stats()}
+                return {"type": "elasticsearch", **self._es_client.get_index_stats(index_name=index_name)}
         except Exception as e:
             return {"type": Config.DATASOURCE_TYPE, "error": str(e)}
         return {"type": "none"}

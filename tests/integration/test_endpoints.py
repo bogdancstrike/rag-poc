@@ -20,7 +20,9 @@ def app():
     """Create the Flask app via main.py logic (QF Framework)."""
     import sys
     from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    root_dir = Path(__file__).resolve().parent.parent.parent
+    sys.path.insert(0, str(root_dir))
+    sys.path.insert(0, str(root_dir / "src"))
 
     from src.session.models import init_db
     init_db()
@@ -159,8 +161,8 @@ class TestChatEndpoint:
             {"id": "d1", "text": "Test chunk", "score": 0.9, "source": "file", "metadata": {}}
         ]
 
-        with patch("src.api.endpoints.get_llm", return_value=mock_llm):
-            with patch("src.api.endpoints.get_retriever", return_value=mock_retriever):
+        with patch("api.endpoints.get_llm", return_value=mock_llm):
+            with patch("api.endpoints.get_retriever", return_value=mock_retriever):
                 r = client.post(
                     "/rag/v1/chat",
                     data=json.dumps({"message": "Who are the top threat actors?"}),

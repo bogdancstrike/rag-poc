@@ -129,6 +129,28 @@
         "module_name": "api.endpoints",
         "method_name": "datasource_status_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_datasource_indices",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/datasource/indices",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "datasource_indices_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_documents",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/documents",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "documents_handler"
+      }
     }
   ]
 }

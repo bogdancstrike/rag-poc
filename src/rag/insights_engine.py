@@ -134,6 +134,7 @@ class InsightsEngine:
                 llm = get_llm()
                 messages, system = self._prompt_builder.build_insights_messages(sample, task_type=ttype)
                 raw = llm.complete_json(messages, system)
+                logger.debug(f"[insights] LLM response: {raw[:500]}...")
                 
                 payload = self._parse_json(raw)
                 if not payload:

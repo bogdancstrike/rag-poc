@@ -1,15 +1,18 @@
-import { useState } from 'react'
-import { ConfigProvider, Layout, theme as antTheme, Tabs, Typography, Space, Button, Tooltip } from 'antd'
+import { useState, useEffect } from 'react'
+import { ConfigProvider, Layout, theme as antTheme, Tabs, Typography, Space, Button, Tooltip, Menu, Spin, Alert, Switch } from 'antd'
 import {
-  BulbOutlined, MessageOutlined, BgColorsOutlined,
+  BulbOutlined, MessageOutlined, BgColorsOutlined, DatabaseOutlined, RobotOutlined,
+  TableOutlined
 } from '@ant-design/icons'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useThemeStore } from '@/stores/themeStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { InsightsPanel } from '@/components/insights/InsightsPanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
+import { DataTable } from '@/components/explore/DataTable'
+import { useIndices } from '@/hooks/useExplore'
 
-const { Header, Content } = Layout
+const { Header, Content, Sider } = Layout
 const { Text } = Typography
 
 const queryClient = new QueryClient({
@@ -19,45 +22,41 @@ const queryClient = new QueryClient({
 })
 
 interface RagModuleProps {
-  /** Base URL of the QSINT RAG backend (e.g. "http://localhost:5100"). */
   baseUrl?: string
-  /** Which ES index / datasource key to use. Defaults to "default". */
-  datasource?: string
-  /** Override initial theme. */
   theme?: 'dark' | 'light'
-  /** Height of the module container. Defaults to "100vh". */
   height?: string | number
 }
 
-/**
- * RagModule — the public-facing component exported by @qsint/rag-ui.
- *
- * Mount anywhere with:
- *   <RagModule baseUrl="http://localhost:5100" datasource="qsint_docs" />
- *
- * Internally wraps InsightsPanel and ChatPanel in a two-tab layout.
- * The "Ask about this" CTA in insights pre-fills the chat input and
- * switches the active tab to Chat automatically.
- */
-function RagModuleInner({ datasource = 'default', height = '100vh' }: RagModuleProps) {
+function RagModuleInner({ height = '100vh' }: RagModuleProps) {
   const { token } = antTheme.useToken()
   const { mode, toggle } = useThemeStore()
+
+  const { data: indices, isLoading: isLoadingIndices, error: indicesError } = useIndices()
+  const [datasource, setDatasource] = useState<string>('')
+  const [aiMode, setAiMode] = useState<boolean>(false)
 
   const [activeTab, setActiveTab]       = useState<'insights' | 'chat'>('insights')
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
   const setStorePendingQuery            = useSessionStore((s) => s.setPendingQuery)
 
-  /** Called when user clicks "Ask about this" on a narrative/topic/anomaly. */
+  // Auto-select first index
+  useEffect(() => {
+    if (indices && indices.length > 0 && !datasource) {
+      setDatasource(indices[0])
+    }
+  }, [indices, datasource])
+
   const handleAskAbout = (question: string) => {
     setPendingQuery(question)
     setStorePendingQuery(question)
     setActiveTab('chat')
+    setAiMode(true)
   }
 
-  const tabItems = [
+  const aiTabItems = [
     {
       key:   'insights',
-      label: <Space><BulbOutlined />Intelligence</Space>,
+      label: <Space><BulbOutlined />Intelligence Report</Space>,
       children: (
         <div style={{ overflowY: 'auto', height: `calc(${typeof height === 'number' ? height + 'px' : height} - 108px)`, padding: '16px' }}>
           <InsightsPanel datasource={datasource} onAskAbout={handleAskAbout} />
@@ -66,7 +65,7 @@ function RagModuleInner({ datasource = 'default', height = '100vh' }: RagModuleP
     },
     {
       key:   'chat',
-      label: <Space><MessageOutlined />Chat</Space>,
+      label: <Space><MessageOutlined />RAG Chat</Space>,
       children: (
         <div style={{ height: `calc(${typeof height === 'number' ? height + 'px' : height} - 108px)` }}>
           <ChatPanel
@@ -78,6 +77,12 @@ function RagModuleInner({ datasource = 'default', height = '100vh' }: RagModuleP
       ),
     },
   ]
+
+  const menuItems = (indices || []).map(idx => ({
+    key: idx,
+    icon: <DatabaseOutlined />,
+    label: idx
+  }))
 
   return (
     <Layout style={{ height, background: token.colorBgLayout }}>
@@ -99,42 +104,82 @@ function RagModuleInner({ datasource = 'default', height = '100vh' }: RagModuleP
           <BulbOutlined style={{ color: token.colorPrimary }} />
           <Text strong style={{ fontSize: 14 }}>QSINT RAG</Text>
           <Text style={{ fontSize: 11, color: token.colorTextDescription, marginLeft: 4 }}>
-            {datasource !== 'default' ? datasource : ''}
+            Multi-Index Explorer
           </Text>
         </Space>
-        <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
-          <Button
-            type="text"
-            size="small"
-            icon={<BgColorsOutlined />}
-            onClick={toggle}
-          />
-        </Tooltip>
+        <Space size={16}>
+          {datasource && (
+            <Space>
+              <Text strong style={{ fontSize: 12 }}>AI Mode</Text>
+              <Switch 
+                checkedChildren={<RobotOutlined />} 
+                unCheckedChildren={<TableOutlined />}
+                checked={aiMode} 
+                onChange={setAiMode} 
+              />
+            </Space>
+          )}
+          <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
+            <Button
+              type="text"
+              size="small"
+              icon={<BgColorsOutlined />}
+              onClick={toggle}
+            />
+          </Tooltip>
+        </Space>
       </Header>
 
-      {/* Tabs */}
-      <Content>
-        <Tabs
-          activeKey={activeTab}
-          onChange={(k) => setActiveTab(k as 'insights' | 'chat')}
-          items={tabItems}
-          style={{ height: '100%' }}
-          tabBarStyle={{
-            margin:  0,
-            padding: '0 16px',
-            background: token.colorBgContainer,
-            borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          }}
-          tabBarExtraContent={null}
-        />
-      </Content>
+      <Layout>
+        <Sider width={250} style={{ background: token.colorBgContainer, borderRight: `1px solid ${token.colorBorderSecondary}` }}>
+          <div style={{ padding: '12px 16px' }}>
+            <Text type="secondary" strong style={{ fontSize: 11 }}>AVAILABLE INDICES</Text>
+          </div>
+          {isLoadingIndices ? (
+            <div style={{ padding: 16, textAlign: 'center' }}><Spin /></div>
+          ) : indicesError ? (
+            <Alert type="error" message="Failed to load indices" style={{ margin: 8 }} />
+          ) : (
+            <Menu
+              mode="inline"
+              selectedKeys={[datasource]}
+              onClick={(e) => setDatasource(e.key)}
+              items={menuItems}
+              style={{ borderRight: 0 }}
+            />
+          )}
+        </Sider>
+        
+        <Content style={{ position: 'relative' }}>
+          {!datasource ? (
+            <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
+              <Text type="secondary">Select an index from the sidebar to explore data.</Text>
+            </div>
+          ) : aiMode ? (
+            <Tabs
+              activeKey={activeTab}
+              onChange={(k) => setActiveTab(k as 'insights' | 'chat')}
+              items={aiTabItems}
+              style={{ height: '100%' }}
+              tabBarStyle={{
+                margin:  0,
+                padding: '0 16px',
+                background: token.colorBgContainer,
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              }}
+              tabBarExtraContent={null}
+            />
+          ) : (
+            <div style={{ height: '100%', padding: '16px' }}>
+               <DataTable datasource={datasource} />
+            </div>
+          )}
+        </Content>
+      </Layout>
     </Layout>
   )
 }
 
-/**
- * Public export — wraps inner component with providers (theme, react-query).
- */
 export function RagModule(props: RagModuleProps) {
   const { mode } = useThemeStore()
   const isDark   = (props.theme ?? mode) === 'dark'

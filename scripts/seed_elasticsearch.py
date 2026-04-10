@@ -146,11 +146,11 @@ def generate_doc(idx: int) -> dict:
     }
 
 
-def bulk_index(client: ESClient, docs: list[dict]) -> tuple[int, int]:
+def bulk_index(client: ESClient, docs: list[dict], index_name: str) -> tuple[int, int]:
     """Bulk-index a batch of docs. Returns (success_count, error_count)."""
     actions = [
         {
-            "_index": client._index,
+            "_index": index_name,
             "_id":    str(uuid.uuid4()),
             "_source": doc,
         }
@@ -161,10 +161,10 @@ def bulk_index(client: ESClient, docs: list[dict]) -> tuple[int, int]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Seed Elasticsearch with QSINT sample data")
-    parser.add_argument("--count", type=int, default=30_000, help="Number of docs to index (default: 30000)")
-    parser.add_argument("--batch", type=int, default=500,    help="Bulk batch size (default: 500)")
-    parser.add_argument("--clear", action="store_true",      help="Delete index before seeding")
+    parser = argparse.ArgumentParser(description="Seed Elasticsearch with QSINT sample data across multiple indices")
+    parser.add_argument("--count", type=int, default=5000, help="Number of docs to index PER INDEX (default: 5000)")
+    parser.add_argument("--batch", type=int, default=500,  help="Bulk batch size (default: 500)")
+    parser.add_argument("--clear", action="store_true",    help="Delete indices before seeding")
     args = parser.parse_args()
 
     client = ESClient()
@@ -172,31 +172,40 @@ def main():
         print("ERROR: Cannot connect to Elasticsearch at", client._client.transport.hosts)
         sys.exit(1)
 
-    if args.clear:
-        try:
-            client._client.indices.delete(index=client._index)
-            print(f"Deleted index '{client._index}'")
-        except Exception:
-            pass
+    indices = [
+        "qsint_docs_global",
+        "qsint_docs_europe",
+        "qsint_docs_apac",
+        "qsint_docs_cyber",
+        "qsint_docs_finance",
+    ]
 
-    client.ensure_index()
+    for idx in indices:
+        if args.clear:
+            try:
+                client._client.indices.delete(index=idx)
+                print(f"Deleted index '{idx}'")
+            except Exception:
+                pass
 
-    total_ok = 0
-    total_err = 0
-    print(f"Seeding {args.count:,} documents into '{client._index}' (batch size: {args.batch})...")
+        client.ensure_index(index_name=idx)
 
-    for start in range(0, args.count, args.batch):
-        end   = min(start + args.batch, args.count)
-        batch = [generate_doc(start + i + 1) for i in range(end - start)]
-        ok, err = bulk_index(client, batch)
-        total_ok  += ok
-        total_err += err
-        print(f"  [{end:>6,}/{args.count:,}] indexed {ok}, errors {err}")
+        total_ok = 0
+        total_err = 0
+        print(f"Seeding {args.count:,} documents into '{idx}' (batch size: {args.batch})...")
 
-    # Refresh index so documents are immediately searchable
-    client._client.indices.refresh(index=client._index)
-    print(f"\nDone: {total_ok:,} documents indexed, {total_err} errors.")
-    print(f"Index stats: {client.get_index_stats()}")
+        for start in range(0, args.count, args.batch):
+            end   = min(start + args.batch, args.count)
+            # We can tweak the document generation logic per index if we want, but for POC random is fine.
+            batch = [generate_doc(start + i + 1) for i in range(end - start)]
+            ok, err = bulk_index(client, batch, idx)
+            total_ok  += ok
+            total_err += err
+            print(f"  [{end:>6,}/{args.count:,}] indexed {ok}, errors {err}")
+
+        # Refresh index so documents are immediately searchable
+        client._client.indices.refresh(index=idx)
+        print(f"Done with '{idx}': {total_ok:,} indexed, {total_err} errors.")
 
 
 if __name__ == "__main__":
