@@ -10,8 +10,8 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // Serve index.html for all unknown routes (SPA support)
     proxy: {
-      // Proxy all API calls to backend (QF framework prefix = /rag)
       '/rag': {
         target: process.env.VITE_API_BASE_URL || 'http://localhost:5100',
         changeOrigin: true,
@@ -27,7 +27,6 @@ export default defineConfig(({ mode }) => ({
         fileName: (format) => `rag-ui.${format}.js`,
       },
       rollupOptions: {
-        // Peer deps — host app provides these
         external: ['react', 'react-dom', 'antd', '@ant-design/icons', '@ant-design/plots', '@ant-design/x'],
         output: {
           globals: {

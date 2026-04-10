@@ -1,7 +1,22 @@
+/**
+ * RagModule — root component with react-router-dom based URL routing.
+ *
+ * Routes:
+ *   /             → redirect to /dashboard
+ *   /dashboard    → Platform Overview
+ *   /explore/:idx → DataTable for a specific index (data mode)
+ *   /ai/:idx      → InsightsPanel + Chat for a specific index (AI mode)
+ *   /tasks        → Platform Overview (task list focused)
+ *   /tasks/:id    → Task Detail page
+ */
+
 import { useState, useEffect } from 'react'
 import {
-  ConfigProvider, Layout, theme as antTheme, Tabs, Typography, Space,
-  Button, Tooltip, Menu, Spin, Alert, Switch,
+  BrowserRouter, Routes, Route, Navigate, useParams, useNavigate, useLocation,
+} from 'react-router-dom'
+import {
+  ConfigProvider, Layout, theme as antTheme, Typography, Space,
+  Button, Tooltip, Menu, Spin, Alert, Switch, Tabs,
 } from 'antd'
 import {
   BulbOutlined, MessageOutlined, BgColorsOutlined, DatabaseOutlined,
@@ -16,7 +31,6 @@ import { DataTable } from '@/components/explore/DataTable'
 import { OverviewDashboard } from '@/components/dashboard/OverviewDashboard'
 import { TaskDetailPanel } from '@/components/dashboard/TaskDetailPanel'
 import { useIndices } from '@/hooks/useExplore'
-import { Document } from '@/api/explore'
 
 const { Header, Content, Sider } = Layout
 const { Text } = Typography
@@ -27,68 +41,240 @@ const queryClient = new QueryClient({
   },
 })
 
-interface RagModuleProps {
-  baseUrl?: string
-  theme?: 'dark' | 'light'
-  height?: string | number
+// ── Sidebar navigation ─────────────────────────────────────────────────────
+
+function AppSidebar() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { data: indices, isLoading, error } = useIndices()
+  const { token } = antTheme.useToken()
+
+  /** Derive the currently selected sidebar key from the URL. */
+  const selectedKey = (() => {
+    const path = location.pathname
+    if (path === '/' || path.startsWith('/dashboard') || path.startsWith('/tasks')) return '__dashboard__'
+    const m = path.match(/^\/(explore|ai)\/(.+)/)
+    if (m) return m[2]
+    return ''
+  })()
+
+  const menuItems = [
+    { key: '__dashboard__', icon: <DashboardOutlined />, label: 'Platform Overview' },
+    { type: 'divider' },
+    ...(indices || []).map((idx) => ({
+      key: idx,
+      icon: <DatabaseOutlined />,
+      label: idx,
+    })),
+  ]
+
+  const handleSelect = ({ key }: { key: string }) => {
+    if (key === '__dashboard__') {
+      navigate('/dashboard')
+    } else {
+      navigate(`/explore/${encodeURIComponent(key)}`)
+    }
+  }
+
+  return (
+    <Sider
+      width={240}
+      style={{
+        background: token.colorBgContainer,
+        borderRight: `1px solid ${token.colorBorderSecondary}`,
+        height: '100%',
+        overflow: 'auto',
+      }}
+    >
+      <div style={{ padding: '12px 16px 4px' }}>
+        <Text type="secondary" strong style={{ fontSize: 11 }}>AVAILABLE INDICES</Text>
+      </div>
+      {isLoading ? (
+        <div style={{ padding: 16, textAlign: 'center' }}><Spin /></div>
+      ) : error ? (
+        <Alert type="error" message="Failed to load indices" style={{ margin: 8 }} />
+      ) : (
+        <Menu
+          mode="inline"
+          selectedKeys={[selectedKey]}
+          onClick={handleSelect}
+          items={menuItems as any}
+          style={{ borderRight: 0 }}
+        />
+      )}
+    </Sider>
+  )
 }
 
-/** Lightweight state-based router state. */
-type PageState =
-  | { page: 'main' }
-  | { page: 'task_detail'; task: any; category: 'insight' | 'enrichment' }
+// ── Top bar ────────────────────────────────────────────────────────────────
 
-function RagModuleInner({ height = '100vh' }: RagModuleProps) {
+function AppHeader() {
   const { token } = antTheme.useToken()
   const { mode, toggle } = useThemeStore()
+  const location = useLocation()
 
-  const { data: indices, isLoading: isLoadingIndices, error: indicesError } = useIndices()
-  const [datasource, setDatasource] = useState<string>('__dashboard__')
-  const [pageState, setPageState] = useState<PageState>({ page: 'main' })
+  /** Show the AI Mode toggle only on /explore and /ai routes. */
+  const navigate = useNavigate()
+  const isExplore = location.pathname.startsWith('/explore/')
+  const isAi = location.pathname.startsWith('/ai/')
+  const indexSlug = location.pathname.match(/^\/(explore|ai)\/(.+)/)?.[2] || ''
+  const decodedIndex = indexSlug ? decodeURIComponent(indexSlug) : ''
 
-  // Per-datasource AI mode toggle, persisted in localStorage
-  const [aiModes, setAiModes] = useState<Record<string, boolean>>(() => {
-    try {
-      const saved = localStorage.getItem('qsint_ai_modes')
-      return saved ? JSON.parse(saved) : {}
-    } catch {
-      return {}
-    }
-  })
-  const aiMode = aiModes[datasource] || false
-  const setAiMode = (checked: boolean) => {
-    setAiModes((prev) => {
-      const next = { ...prev, [datasource]: checked }
-      try { localStorage.setItem('qsint_ai_modes', JSON.stringify(next)) } catch {}
-      return next
-    })
+  return (
+    <Header
+      style={{
+        padding: '0 16px',
+        height: 48,
+        lineHeight: '48px',
+        background: token.colorBgContainer,
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexShrink: 0,
+      }}
+    >
+      <Space>
+        <BulbOutlined style={{ color: token.colorPrimary, fontSize: 16 }} />
+        <Text strong style={{ fontSize: 14 }}>QSINT RAG</Text>
+        <Text style={{ fontSize: 11, color: token.colorTextDescription }}>
+          Intelligence Platform
+        </Text>
+      </Space>
+      <Space size={16}>
+        {(isExplore || isAi) && decodedIndex && (
+          <Space>
+            <Text style={{ fontSize: 12, color: token.colorTextSecondary }}>
+              {decodedIndex}
+            </Text>
+            <Text strong style={{ fontSize: 12 }}>AI Mode</Text>
+            <Switch
+              checkedChildren={<RobotOutlined />}
+              unCheckedChildren={<TableOutlined />}
+              checked={isAi}
+              onChange={(v) => {
+                if (v) navigate(`/ai/${indexSlug}`)
+                else navigate(`/explore/${indexSlug}`)
+              }}
+            />
+          </Space>
+        )}
+        <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
+          <Button type="text" size="small" icon={<BgColorsOutlined />} onClick={toggle} />
+        </Tooltip>
+      </Space>
+    </Header>
+  )
+}
+
+// ── Page views ─────────────────────────────────────────────────────────────
+
+/** Platform Overview + Task list at /dashboard */
+function DashboardPage() {
+  const navigate = useNavigate()
+  return (
+    <div style={{ height: '100%', overflowY: 'auto' }}>
+      <OverviewDashboard
+        onSelectTask={(task, category) => {
+          const id = category === 'insight'
+            ? `insight__${task.datasource}__${task.insight_type}`
+            : `enrichment__${task.datasource}__${task.doc_id}`
+          navigate(`/tasks/${encodeURIComponent(id)}`, { state: { task, category } })
+        }}
+      />
+    </div>
+  )
+}
+
+/** Task detail page at /tasks/:id */
+function TaskDetailPage() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { id } = useParams<{ id: string }>()
+
+  const state = location.state as { task: any; category: 'insight' | 'enrichment' } | null
+
+  if (!state?.task) {
+    return (
+      <div style={{ padding: 32 }}>
+        <Alert
+          type="warning"
+          message="Task not found"
+          description="This task detail is not available. Please navigate from the Platform Overview."
+          action={<Button onClick={() => navigate('/dashboard')}>Go to Dashboard</Button>}
+        />
+      </div>
+    )
   }
 
-  const [activeTab, setActiveTab] = useState<'insights' | 'chat'>('insights')
-  const [pendingQuery, setPendingQuery] = useState<string | null>(null)
-  const setStorePendingQuery = useSessionStore((s) => s.setPendingQuery)
+  return (
+    <div style={{ height: '100%', overflowY: 'auto' }}>
+      <TaskDetailPanel
+        task={state.task}
+        category={state.category}
+        onBack={() => navigate('/dashboard')}
+      />
+    </div>
+  )
+}
 
-  const handleAskAbout = (question: string) => {
-    setPendingQuery(question)
-    setStorePendingQuery(question)
-    setActiveTab('chat')
-    setAiMode(true)
-  }
+/** Raw data exploration at /explore/:index */
+function ExplorePage() {
+  const { index } = useParams<{ index: string }>()
+  const navigate = useNavigate()
+  const { setPendingQuery } = useSessionStore()
 
-  /** Called when user sends docs/insights to RAG Chat from other panels. */
+  const datasource = index ? decodeURIComponent(index) : ''
+
   const handleSendToRag = (docs: any[]) => {
-    const context = docs.map((d) => `Title: ${d.title || '(untitled)'}\nContent: ${d.text || ''}`).join('\n\n')
+    const context = docs
+      .map((d) => `Title: ${d.title || '(untitled)'}\nContent: ${d.text || ''}`)
+      .join('\n\n')
     const query = `Please analyze the following ${docs.length} document(s):\n\n${context}`
     setPendingQuery(query)
-    setStorePendingQuery(query)
-    setActiveTab('chat')
-    setAiMode(true)
+    navigate(`/ai/${encodeURIComponent(datasource)}`)
   }
 
-  const heightStr = typeof height === 'number' ? `${height}px` : height
-  const contentHeight = `calc(${heightStr} - 108px)` // header (48) + tab bar (60)
+  return (
+    <div style={{ height: '100%', padding: 16 }}>
+      <DataTable datasource={datasource} onSendToRag={handleSendToRag} />
+    </div>
+  )
+}
 
-  const aiTabItems = [
+/** AI mode (Insights + Chat) at /ai/:index */
+function AiPage() {
+  const { index } = useParams<{ index: string }>()
+  const navigate = useNavigate()
+  const [activeTab, setActiveTab] = useState<'insights' | 'chat'>('insights')
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null)
+  const { pendingQuery: storePending, setPendingQuery: setStorePending } = useSessionStore()
+  const { token } = antTheme.useToken()
+
+  const datasource = index ? decodeURIComponent(index) : ''
+
+  useEffect(() => {
+    if (storePending) {
+      setPendingQuery(storePending)
+      setStorePending(null)
+      setActiveTab('chat')
+    }
+  }, [storePending])
+
+  const handleAskAbout = (q: string) => {
+    setPendingQuery(q)
+    setActiveTab('chat')
+  }
+
+  const handleSendToRag = (docs: any[]) => {
+    const context = docs
+      .map((d) => `Title: ${d.title || '(untitled)'}\nContent: ${d.text || ''}`)
+      .join('\n\n')
+    setPendingQuery(`Analyze the following:\n\n${context}`)
+    setActiveTab('chat')
+  }
+
+  const tabItems = [
     {
       key: 'insights',
       label: (
@@ -98,7 +284,7 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
         </Space>
       ),
       children: (
-        <div style={{ overflowY: 'auto', height: contentHeight, padding: '16px' }}>
+        <div style={{ overflowY: 'auto', height: 'calc(100vh - 108px)', padding: 16 }}>
           <InsightsPanel
             datasource={datasource}
             onAskAbout={handleAskAbout}
@@ -116,7 +302,7 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
         </Space>
       ),
       children: (
-        <div style={{ height: contentHeight }}>
+        <div style={{ height: 'calc(100vh - 108px)' }}>
           <ChatPanel
             datasource={datasource}
             prefillQuery={activeTab === 'chat' ? pendingQuery : null}
@@ -127,156 +313,55 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
     },
   ]
 
-  const menuItems = [
-    {
-      key: '__dashboard__',
-      icon: <DashboardOutlined />,
-      label: 'Platform Overview',
-    },
-    { type: 'divider' },
-    ...(indices || []).map((idx) => ({
-      key: idx,
-      icon: <DatabaseOutlined />,
-      label: idx,
-    })),
-  ]
+  return (
+    <Tabs
+      activeKey={activeTab}
+      onChange={(k) => setActiveTab(k as 'insights' | 'chat')}
+      items={tabItems}
+      style={{ height: '100%' }}
+      tabBarStyle={{
+        margin: 0,
+        padding: '0 16px',
+        background: token.colorBgContainer,
+        borderBottom: `1px solid ${token.colorBorderSecondary}`,
+      }}
+    />
+  )
+}
 
-  /** Navigate back from a task detail page to the platform overview. */
-  const handleTaskBack = () => {
-    setPageState({ page: 'main' })
-  }
+// ── Main shell ─────────────────────────────────────────────────────────────
 
-  /** Navigate to a task detail page. */
-  const handleSelectTask = (task: any, category: 'insight' | 'enrichment') => {
-    if (!task) return
-    setPageState({ page: 'task_detail', task, category })
-  }
-
-  // When datasource changes, reset page state
-  useEffect(() => {
-    setPageState({ page: 'main' })
-  }, [datasource])
+function AppShell() {
+  const { token } = antTheme.useToken()
 
   return (
-    <Layout style={{ height, background: token.colorBgLayout }}>
-      {/* Top bar */}
-      <Header
-        style={{
-          padding: '0 16px',
-          height: 48,
-          lineHeight: '48px',
-          background: token.colorBgContainer,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexShrink: 0,
-        }}
-      >
-        <Space>
-          <BulbOutlined style={{ color: token.colorPrimary }} />
-          <Text strong style={{ fontSize: 14 }}>QSINT RAG</Text>
-          <Text style={{ fontSize: 11, color: token.colorTextDescription, marginLeft: 4 }}>
-            Intelligence Platform
-          </Text>
-        </Space>
-        <Space size={16}>
-          {datasource && datasource !== '__dashboard__' && (
-            <Space>
-              <Text strong style={{ fontSize: 12 }}>AI Mode</Text>
-              <Switch
-                checkedChildren={<RobotOutlined />}
-                unCheckedChildren={<TableOutlined />}
-                checked={aiMode}
-                onChange={setAiMode}
-              />
-            </Space>
-          )}
-          <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
-            <Button type="text" size="small" icon={<BgColorsOutlined />} onClick={toggle} />
-          </Tooltip>
-        </Space>
-      </Header>
-
+    <Layout style={{ height: '100vh', background: token.colorBgLayout }}>
+      <AppHeader />
       <Layout>
-        {/* Sidebar */}
-        <Sider
-          width={240}
-          style={{
-            background: token.colorBgContainer,
-            borderRight: `1px solid ${token.colorBorderSecondary}`,
-          }}
-        >
-          <div style={{ padding: '12px 16px 4px' }}>
-            <Text type="secondary" strong style={{ fontSize: 11 }}>
-              AVAILABLE INDICES
-            </Text>
-          </div>
-          {isLoadingIndices ? (
-            <div style={{ padding: 16, textAlign: 'center' }}>
-              <Spin />
-            </div>
-          ) : indicesError ? (
-            <Alert type="error" message="Failed to load indices" style={{ margin: 8 }} />
-          ) : (
-            <Menu
-              mode="inline"
-              selectedKeys={[datasource]}
-              onClick={(e) => setDatasource(e.key)}
-              items={menuItems as any}
-              style={{ borderRight: 0 }}
-            />
-          )}
-        </Sider>
-
-        {/* Main content area */}
+        <AppSidebar />
         <Content style={{ position: 'relative', overflow: 'hidden' }}>
-          {/* Task detail page */}
-          {pageState.page === 'task_detail' ? (
-            <div style={{ height: '100%', overflowY: 'auto' }}>
-              <TaskDetailPanel
-                task={pageState.task}
-                category={pageState.category}
-                onBack={handleTaskBack}
-              />
-            </div>
-          ) : !datasource ? (
-            <div
-              style={{
-                display: 'flex',
-                height: '100%',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Text type="secondary">Select an index from the sidebar to explore data.</Text>
-            </div>
-          ) : datasource === '__dashboard__' ? (
-            <div style={{ height: '100%', overflowY: 'auto' }}>
-              <OverviewDashboard onSelectTask={handleSelectTask} />
-            </div>
-          ) : aiMode ? (
-            <Tabs
-              activeKey={activeTab}
-              onChange={(k) => setActiveTab(k as 'insights' | 'chat')}
-              items={aiTabItems}
-              style={{ height: '100%' }}
-              tabBarStyle={{
-                margin: 0,
-                padding: '0 16px',
-                background: token.colorBgContainer,
-                borderBottom: `1px solid ${token.colorBorderSecondary}`,
-              }}
-            />
-          ) : (
-            <div style={{ height: '100%', padding: '16px' }}>
-              <DataTable datasource={datasource} onSendToRag={handleSendToRag} />
-            </div>
-          )}
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/tasks" element={<DashboardPage />} />
+            <Route path="/tasks/:id" element={<TaskDetailPage />} />
+            <Route path="/explore/:index" element={<ExplorePage />} />
+            <Route path="/ai/:index" element={<AiPage />} />
+            {/* Fallback */}
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
         </Content>
       </Layout>
     </Layout>
   )
+}
+
+// ── Public export ──────────────────────────────────────────────────────────
+
+interface RagModuleProps {
+  baseUrl?: string
+  theme?: 'dark' | 'light'
+  height?: string | number
 }
 
 export function RagModule(props: RagModuleProps) {
@@ -300,10 +385,10 @@ export function RagModule(props: RagModuleProps) {
         components: {
           Layout: {
             headerBg: isDark ? '#1f1f1f' : '#ffffff',
-            siderBg: isDark ? '#1f1f1f' : '#ffffff',
+            siderBg:  isDark ? '#1f1f1f' : '#ffffff',
           },
           Menu: {
-            itemSelectedBg: isDark ? '#111b26' : '#e6f7ff',
+            itemSelectedBg:    isDark ? '#111b26' : '#e6f7ff',
             itemSelectedColor: '#1890ff',
             itemHeight: 36,
           },
@@ -316,7 +401,9 @@ export function RagModule(props: RagModuleProps) {
       }}
     >
       <QueryClientProvider client={queryClient}>
-        <RagModuleInner {...props} />
+        <BrowserRouter>
+          <AppShell />
+        </BrowserRouter>
       </QueryClientProvider>
     </ConfigProvider>
   )

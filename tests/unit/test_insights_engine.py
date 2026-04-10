@@ -9,20 +9,27 @@ def engine():
     return InsightsEngine()
 
 def test_empty_response_on_no_docs(engine):
-    with patch("src.rag.insights_engine.get_retriever") as mock_ret:
-        mock_ret.return_value.get_sample.return_value = []
-        resp = engine.get_insights("ds")
-        assert resp["tasks"] == {}
-        assert resp["_meta"]["reason"] == "No documents"
+    """get_insights() should return immediately with pending state; the coordinator
+    runs in background and handles the no-docs case asynchronously.
+    """
+    with patch.object(engine, "_load_all_from_cache", return_value={}):
+        with patch.object(engine, "_set_task_status") as mock_status:
+            with patch("src.rag.insights_engine._executor") as mock_exec:
+                resp = engine.get_insights("ds")
+                # The HTTP response should come back immediately with pending tasks
+                assert resp["_meta"]["refresh_triggered"] is True
+                # Coordinator must be submitted to the executor
+                mock_exec.submit.assert_called_once()
 
 def test_trigger_tasks_initially(engine):
-    sample = [{"id": "1", "text": "doc1"}]
-    with patch("src.rag.insights_engine.get_retriever") as mock_ret:
-        mock_ret.return_value.get_sample.return_value = sample
-        with patch.object(engine, "_load_all_from_cache", return_value={}):
-            with patch.object(engine, "_trigger_tasks") as mock_trigger:
-                engine.get_insights("ds")
-                mock_trigger.assert_called_once()
+    """When no cache exists, get_insights() should mark tasks pending and submit coordinator."""
+    with patch.object(engine, "_load_all_from_cache", return_value={}):
+        with patch.object(engine, "_set_task_status"):
+            with patch("src.rag.insights_engine._executor") as mock_exec:
+                resp = engine.get_insights("ds")
+                assert resp["_meta"]["refresh_triggered"] is True
+                # Coordinator submitted as background job
+                mock_exec.submit.assert_called_once_with(engine._run_coordinator, "ds")
 
 def test_json_parsing_robustness(engine):
     raw = "Some text before ```json\n{\"key\": \"val\"}\n``` after"
