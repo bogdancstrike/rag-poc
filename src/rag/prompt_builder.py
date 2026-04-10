@@ -121,9 +121,15 @@ ENRICH_LOCATIONS_PROMPT = """Extract all geographic locations mentioned in the d
 Output ONLY valid JSON: {"locations": ["location name 1", "location name 2"]}
 List only distinct place names (cities, countries, regions). Do not include coordinates."""
 
-ENRICH_TRANSLATION_PROMPT = """Translate the following text to Romanian language.
-Output ONLY valid JSON: {"text": "Romanian translation here"}
-If the text is already in Romanian, return it unchanged. Preserve structure and meaning."""
+ENRICH_TRANSLATION_PROMPT = """Translate the text below into natural, fluent Romanian suitable for intelligence analysts.
+
+Rules:
+1. Output ONLY valid JSON with exactly this structure: {"text": "translation here"}
+2. Produce a complete, accurate translation — do NOT summarize or omit any content.
+3. Preserve proper nouns (names, organizations, locations) in their original form.
+4. Keep technical terms, acronyms, and codenames unchanged.
+5. If the source text is already in Romanian, return it verbatim in the "text" field.
+6. Do NOT add explanations, notes, or any text outside the JSON."""
 
 class PromptBuilder:
     """Assembles LLM-ready messages from retrieved chunks + conversation history."""
@@ -172,7 +178,7 @@ class PromptBuilder:
             "role": "user",
             "content": f"{ENRICH_TRANSLATION_PROMPT}\n\n=== TEXT TO TRANSLATE ===\n{document_text}",
         }]
-        return messages, "You are a professional translator. Output ONLY valid JSON."
+        return messages, "You are a professional Romanian translator. Translate accurately and completely. Output ONLY valid JSON."
 
     # ── Chat prompt ─────────────────────────────────────────────────────────────
 

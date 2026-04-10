@@ -44,6 +44,51 @@ def _signal_handler(signum, frame):
     sys.exit(0)
 
 
+def _recover_dangling_tasks() -> None:
+    """Reset tasks stuck in 'processing' from a previous crash or restart.
+
+    - InsightsCache: reset to 'pending' and republish coordinator tasks so they
+      are picked up by the Kafka worker automatically.
+    - DocumentEnrichment: reset to 'error' (document text is not stored in the DB,
+      so we can't requeue automatically — the user can retry via the UI).
+    """
+    try:
+        from src.session.models import InsightsCache, DocumentEnrichment, get_db
+        from src.worker.kafka_producer import publish_task
+
+        with get_db() as db:
+            # ── Insights ──────────────────────────────────────────────────────
+            stuck_insights = db.query(InsightsCache).filter_by(status="processing").all()
+            requeued_ds: set[str] = set()
+            for row in stuck_insights:
+                row.status = "pending"
+                row.error = None
+                requeued_ds.add(row.datasource)
+            if stuck_insights:
+                db.commit()
+                for ds in requeued_ds:
+                    publish_task({"task_type": "insight_coordinator", "datasource": ds})
+                logger.info(
+                    f"[QSINT-RAG] Requeued {len(stuck_insights)} dangling insight task(s) "
+                    f"across datasource(s): {', '.join(requeued_ds)}"
+                )
+
+            # ── Enrichment ────────────────────────────────────────────────────
+            stuck_enrichments = db.query(DocumentEnrichment).filter_by(status="processing").all()
+            for row in stuck_enrichments:
+                row.status = "error"
+                row.error = "Interrupted by app restart — please retry"
+            if stuck_enrichments:
+                db.commit()
+                logger.info(
+                    f"[QSINT-RAG] Marked {len(stuck_enrichments)} dangling enrichment task(s) "
+                    f"as error (retry via UI)"
+                )
+
+    except Exception as e:
+        logger.warning(f"[QSINT-RAG] Task recovery failed (non-fatal): {e}")
+
+
 def main():
     logger.info(
         f"[QSINT-RAG] Starting — dev_mode={Config.DEV_MODE} "
@@ -64,6 +109,9 @@ def main():
         logger.info("[QSINT-RAG] Database tables initialized")
     except Exception as e:
         logger.warning(f"[QSINT-RAG] Could not initialize DB (will retry on first use): {e}")
+
+    # Recover tasks that were interrupted mid-processing by a previous crash/restart.
+    _recover_dangling_tasks()
 
     # Start Kafka consumer worker
     from src.worker.kafka_consumer import start_consumer
