@@ -32,6 +32,7 @@ class LLMClient:
         self._client = OpenAI(
             base_url=Config.LLM_BASE_URL,
             api_key="ollama",  # dummy key — Ollama doesn't validate it
+            timeout=Config.LLM_TIMEOUT,
         )
         self._model       = Config.LLM_MODEL
         self._max_tokens  = Config.LLM_MAX_TOKENS
@@ -120,8 +121,10 @@ class LLMClient:
         /no_think system-prompt token (model-level, always works) and the
         options.think=false Ollama parameter (API-level, requires Ollama ≥0.6).
         """
-        # Append /no_think to suppress Qwen3 reasoning tokens at the model level.
-        # Safe for all models — non-Qwen models ignore the token.
+        # Append /no_think to skip the reasoning chain — JSON extraction tasks do
+        # not need long think budgets and thinking makes them 3-5× slower.
+        # NOTE: keep the document text at the END of the user message (after the
+        # schema/instructions) so the model doesn't respond with a "ready" template.
         no_think_system = (system.rstrip() + "\n/no_think") if system else "/no_think"
         full_messages = self._build_messages(messages, no_think_system)
         with tracer.start_as_current_span("llm.complete_json") as span:
@@ -131,14 +134,16 @@ class LLMClient:
                 resp = self._client.chat.completions.create(
                     model=self._model,
                     messages=full_messages,
-                    max_tokens=self._max_tokens,
+                    max_tokens=Config.LLM_JSON_MAX_TOKENS,
                     temperature=0.0,   # Deterministic as possible for JSON
                     stream=False,
                     response_format={"type": "json_object"},
-                    # Ollama: expand context window to 16K so insights prompt fits.
-                    # think=false disables Qwen3-style <think>...</think> reasoning
-                    # blocks that would otherwise wrap and break JSON output.
-                    extra_body={"options": {"num_ctx": 16384, "think": False}},
+                    # Ollama: expand context window to 16K so insights/enrichment
+                    # prompts fit. Do NOT pass think=false — on qwen3.5 it causes
+                    # the model to output {} instead of real JSON when combined with
+                    # response_format. Let the model think freely; reasoning tokens
+                    # go to the separate 'reasoning' field, content stays clean JSON.
+                    extra_body={"options": {"num_ctx": 16384}},
                 )
                 content = resp.choices[0].message.content or "{}"
                 # Strip any residual <think>...</think> blocks (Qwen3 / reasoning

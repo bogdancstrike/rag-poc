@@ -275,6 +275,17 @@
     },
     {
       "namespace": "rag",
+      "operation_name": "v1_tasks_analytics",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/tasks/analytics",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "tasks_analytics_handler"
+      }
+    },
+    {
+      "namespace": "rag",
       "operation_name": "v1_documents_status",
       "model_name": "Empty",
       "request_method": ["GET", "POST"],

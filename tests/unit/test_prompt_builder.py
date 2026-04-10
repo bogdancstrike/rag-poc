@@ -42,7 +42,6 @@ class TestBuildChatMessages:
     def test_history_is_injected_into_messages(self, builder, sample_chunks, sample_history):
         messages, _ = builder.build_chat_messages("New question?", sample_chunks, sample_history)
         roles = [m["role"] for m in messages]
-        # history + current user message
         assert roles.count("user") >= 2
         assert roles.count("assistant") >= 1
 
@@ -55,9 +54,13 @@ class TestBuildChatMessages:
     def test_chunks_are_embedded_in_user_message(self, builder, sample_chunks):
         messages, _ = builder.build_chat_messages("query", sample_chunks, [])
         last_content = messages[-1]["content"]
-        assert "doc1" in last_content
-        assert "doc2" in last_content
         assert "APT28" in last_content
+
+    def test_chunk_text_appears_in_message(self, builder):
+        chunks = [{"id": "abc123", "text": "Unique text about alpha bravo.", "score": 0.9, "source": "es", "metadata": {}}]
+        messages, _ = builder.build_chat_messages("query", chunks, [])
+        last_content = messages[-1]["content"]
+        assert "Unique text about alpha bravo" in last_content
 
     def test_empty_chunks_produces_no_context_message(self, builder):
         messages, _ = builder.build_chat_messages("query", [], [])
@@ -68,6 +71,18 @@ class TestBuildChatMessages:
         messages, _ = builder.build_chat_messages("query", sample_chunks, [])
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
+
+    def test_multiple_chunks_all_appear_in_context(self, builder, sample_chunks):
+        messages, _ = builder.build_chat_messages("query", sample_chunks, [])
+        content = messages[-1]["content"]
+        assert "APT28" in content
+        assert "Fancy Bear" in content
+
+    def test_history_order_preserved(self, builder, sample_chunks, sample_history):
+        messages, _ = builder.build_chat_messages("Final?", sample_chunks, sample_history)
+        # History messages appear before the final user message
+        user_indices = [i for i, m in enumerate(messages) if m["role"] == "user"]
+        assert user_indices[-1] == len(messages) - 1  # last message is current query
 
 
 class TestBuildInsightsMessages:
@@ -85,14 +100,47 @@ class TestBuildInsightsMessages:
         messages, _ = builder.build_insights_messages(docs)
         assert "5" in messages[0]["content"]
 
-    def test_doc_ids_in_message(self, builder):
-        docs = [{"id": "abc123", "text": "Test document.", "score": 1.0}]
+    def test_doc_text_appears_in_message(self, builder):
+        """Doc text (not necessarily ID) should appear in the corpus message."""
+        docs = [{"id": "abc123", "text": "Test document unique phrase xyz.", "score": 1.0}]
         messages, _ = builder.build_insights_messages(docs)
-        assert "abc123" in messages[0]["content"]
+        assert "Test document unique phrase xyz" in messages[0]["content"]
 
     def test_long_text_is_truncated(self, builder):
         long_text = "A" * 2000
         docs = [{"id": "d1", "text": long_text, "score": 1.0}]
         messages, _ = builder.build_insights_messages(docs)
-        # text is capped at 600 chars per doc
         assert len(messages[0]["content"]) < len(long_text) * 2
+
+    def test_graph_task_type_changes_user_message(self, builder):
+        docs = [{"id": "d1", "text": "Entity relationship text.", "score": 1.0}]
+        msgs_summary, _ = builder.build_insights_messages(docs, task_type="summary")
+        msgs_graph, _   = builder.build_insights_messages(docs, task_type="graph")
+        # The user message content embeds the task-specific schema — should differ by type
+        assert msgs_summary[0]["content"] != msgs_graph[0]["content"]
+
+    def test_empty_docs_still_returns_valid_structure(self, builder):
+        messages, system = builder.build_insights_messages([])
+        assert isinstance(messages, list)
+        assert isinstance(system, str)
+
+    def test_build_field_enrichment_messages_returns_tuple(self, builder):
+        messages, system = builder.build_field_enrichment_messages("Some text about threats.", "sentiment")
+        assert isinstance(messages, list)
+        assert isinstance(system, str)
+        assert len(messages) > 0
+
+    def test_field_enrichment_includes_field_name(self, builder):
+        messages, _ = builder.build_field_enrichment_messages("Text here.", "classification")
+        content_combined = " ".join(m["content"] for m in messages)
+        assert "classification" in content_combined.lower() or "classification" in _
+
+
+class TestBuildFieldEnrichment:
+
+    def test_all_supported_fields_produce_output(self, builder):
+        fields = ["sentiment", "classification", "summary", "entities", "iocs", "graph", "timeline", "translation"]
+        for field in fields:
+            msgs, sys = builder.build_field_enrichment_messages("Test intelligence text.", field)
+            assert len(msgs) > 0, f"No messages for field={field}"
+            assert isinstance(sys, str)

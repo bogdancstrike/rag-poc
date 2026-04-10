@@ -216,7 +216,7 @@ def get_engine():
     if _engine is None:
         kwargs = {"pool_pre_ping": True}
         if Config.DATABASE_URL.startswith("postgresql"):
-            kwargs.update({"pool_size": 10, "max_overflow": 20})
+            kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_recycle": 300})
         _engine = create_engine(Config.DATABASE_URL, **kwargs)
     return _engine
 

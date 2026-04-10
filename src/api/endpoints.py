@@ -645,9 +645,19 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
         # ── Step 1: Main LLM enrichment (all structured fields) ──────────────
         messages, system = builder.build_enrichment_messages(text[:3000])
         raw = llm.complete_json(messages, system)
+        logger.debug(f"[enrich] raw LLM output (first 500): {raw[:500]!r}")
         payload = InsightsEngine._parse_json(raw)
-        if not payload:
+        if payload is None:
+            logger.error(f"[enrich] unparseable JSON for doc_id={doc_id}: {raw[:300]!r}")
             raise ValueError("Failed to parse enrichment JSON from LLM")
+
+        # Guard: the model sometimes returns a template/ready response instead of
+        # enrichment (e.g. when thinking is suppressed). Fail fast so we don't waste
+        # time on geocoding/translation with a garbage payload.
+        _EXPECTED = {"summary", "sentiment", "classification", "entities"}
+        if not any(k in payload for k in _EXPECTED):
+            logger.error(f"[enrich] LLM returned non-enrichment JSON keys={list(payload.keys())} doc_id={doc_id}")
+            raise ValueError(f"LLM did not enrich the document (got keys: {list(payload.keys())})")
 
         # ── Step 2: IOC extraction (regex, synchronous) ───────────────────────
         payload["iocs"] = _extract_iocs(text)
@@ -682,7 +692,7 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
                 row.payload = payload
                 row.error = None
                 db.commit()
-                logger.info(f"[enrich] Complete: doc_id={doc_id}")
+                logger.info(f"[enrich] Complete: doc_id={doc_id}", "magenta")
     except Exception as e:
         logger.error(f"[enrich] Failed doc_id={doc_id}: {e}", exc_info=True)
         try:
@@ -724,55 +734,62 @@ def document_enrich_stream_handler(app, operation, request, **kwargs):
             yield f'data: {json.dumps({"type": "error", "error": "datasource, doc_id, and text are required"})}\n\n'
         return Response(stream_with_context(_err()), mimetype="text/event-stream", headers=sse_headers)
 
+    logger.info(f"[enrich] ▶ stream started doc_id={doc_id} ds={datasource} force={force}", "green")
+
     def generate():
         from src.session.models import DocumentEnrichment, get_db
         from src.rag.llm_client import get_llm
         from src.rag.prompt_builder import PromptBuilder
         from src.rag.insights_engine import InsightsEngine
 
-        # ── Check cache ──────────────────────────────────────────────────────
+        # ── Check cache (read-only — no status writes yet) ───────────────────
         try:
             with get_db() as db:
                 row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
                 if row and row.status == "complete" and not force:
+                    logger.info(f"[enrich] ✓ cache hit  doc_id={doc_id} ds={datasource}", "green")
                     yield f'data: {json.dumps({"type": "cached", "payload": row.payload or {}})}\n\n'
                     return
-
-                # Reset / create row — use merge() to handle concurrent requests
-                # that may have already inserted the row between our SELECT and now.
-                now = datetime.now(timezone.utc)
-                if not row:
-                    row = DocumentEnrichment(
-                        doc_id=doc_id,
-                        datasource=datasource,
-                        status="processing",
-                        generated_at=now,
-                        updated_at=now,
-                        error=None,
-                        retry_count=0,
-                    )
-                    row = db.merge(row)  # INSERT or UPDATE by PK — race-safe
-                else:
-                    row.status = "processing"
-                    row.started_at = now
-                    row.updated_at = now
-                    row.error = None
-                db.commit()
         except Exception as e:
-            yield f'data: {json.dumps({"type": "error", "error": f"DB init failed: {e}"})}\n\n'
+            yield f'data: {json.dumps({"type": "error", "error": f"DB error: {e}"})}\n\n'
             return
 
+        # ── Run enrichment inline (no intermediate DB status writes) ─────────
+        # The SSE path is a live HTTP connection — we only persist on completion.
+        # Intermediate pending/processing rows from the stream show up as phantom
+        # tasks in the task monitor and make it look like more are running than are.
         accumulated: dict = {}
         builder = PromptBuilder()
         llm = get_llm()
+        t0 = datetime.now(timezone.utc)
 
         try:
             # ── Step 1: Main LLM (summary + all structured fields) ───────────
+            # Write "processing" to DB only here — the LLM call is imminent.
+            # This is the one DB write before completion so the task monitor shows
+            # exactly the docs that are actively using the GPU, not every open tab.
+            now = datetime.now(timezone.utc)
+            try:
+                with get_db() as db:
+                    row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                    if not row:
+                        row = DocumentEnrichment(doc_id=doc_id, datasource=datasource,
+                                                 generated_at=now, started_at=now,
+                                                 status="processing")
+                        db.add(row)
+                    else:
+                        row.status     = "processing"
+                        row.started_at = now
+                        row.error      = None
+                    db.commit()
+            except Exception:
+                pass  # non-fatal — enrichment continues even if status write fails
+
             messages, system = builder.build_enrichment_messages(text[:3000])
             raw = llm.complete_json(messages, system)
             logger.debug(f"[enrich_stream] raw LLM output (first 500): {raw[:500]!r}")
             step1 = InsightsEngine._parse_json(raw)
-            if not step1:
+            if step1 is None:
                 logger.error(f"[enrich_stream] unparseable raw (full): {raw!r}")
                 raise ValueError("LLM returned unparseable JSON for main enrichment")
             accumulated.update(step1)
@@ -807,28 +824,29 @@ def document_enrich_stream_handler(app, operation, request, **kwargs):
                     logger.warning(f"[enrich_stream] Translation failed: {te}")
             yield f'data: {json.dumps({"type": "partial", "payload": dict(accumulated)})}\n\n'
 
-            # ── Persist ───────────────────────────────────────────────────────
-            with get_db() as db:
-                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-                if row:
-                    row.status = "complete"
-                    row.payload = dict(accumulated)
-                    row.error = None
+            # ── Persist as complete (first and only DB write for this path) ───
+            elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+            now = datetime.now(timezone.utc)
+            try:
+                with get_db() as db:
+                    row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                    if not row:
+                        row = DocumentEnrichment(doc_id=doc_id, datasource=datasource,
+                                                 generated_at=now, started_at=now)
+                        db.add(row)
+                    row.status    = "complete"
+                    row.payload   = dict(accumulated)
+                    row.error     = None
+                    row.updated_at = now
                     db.commit()
+            except Exception as dbe:
+                logger.error(f"[enrich_stream] DB persist failed doc_id={doc_id}: {dbe}")
 
+            logger.info(f"[enrich] ✓ complete doc_id={doc_id} ds={datasource} elapsed={elapsed:.1f}s", "magenta")
             yield f'data: {json.dumps({"type": "complete", "payload": dict(accumulated)})}\n\n'
 
         except Exception as e:
             logger.error(f"[enrich_stream] Failed doc_id={doc_id}: {e}", exc_info=True)
-            try:
-                with get_db() as db:
-                    row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-                    if row:
-                        row.status = "error"
-                        row.error = str(e)
-                        db.commit()
-            except Exception:
-                pass
             yield f'data: {json.dumps({"type": "error", "error": str(e)})}\n\n'
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream", headers=sse_headers)
@@ -1010,7 +1028,7 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
 
                 client = ESClient()
                 docs, _ = client.get_documents(index_name=datasource, offset=0, limit=1,
-                                               query=f"_id:{task}")
+                                               id_filter=[task])
                 text = ""
                 if docs:
                     text = docs[0].get("text", "")
@@ -1343,6 +1361,165 @@ def task_detail_handler(app, operation, request, task_id: str = "", **kwargs):
         except Exception as e:
             logger.error(f"[api] task_detail_handler error: {e}", exc_info=True)
             return {"error": str(e)}, 500
+
+
+def tasks_analytics_handler(app, operation, request, **kwargs):
+    """GET /v1/tasks/analytics — aggregated timing and throughput stats.
+
+    Query params:
+        datasource : filter to one datasource (optional)
+        category   : insight | enrichment (optional)
+
+    Returns:
+        timing     : avg queue_time_ms, avg exec_time_ms, avg total_time_ms per category+type
+        throughput : task counts bucketed by completed_at into 5m/1h/12h/1d/7d windows
+        status_dist: counts by status
+        type_dist  : counts by task_type
+    """
+    from src.session.models import InsightsCache, DocumentEnrichment, get_db
+
+    datasource_f = flask_request.args.get("datasource", "")
+    category_f   = flask_request.args.get("category", "")
+
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        with get_db() as db:
+            # ── Collect all tasks (insight + enrichment) into dicts ──────────────
+            rows = []
+
+            if not category_f or category_f == "insight":
+                q = db.query(InsightsCache)
+                if datasource_f:
+                    q = q.filter(InsightsCache.datasource == datasource_f)
+                for row in q.all():
+                    rows.append({
+                        "category":     "insight",
+                        "task_type":    row.insight_type,
+                        "status":       row.status,
+                        "generated_at": row.generated_at,
+                        "started_at":   row.started_at,
+                        "updated_at":   row.updated_at or row.generated_at,
+                    })
+
+            if not category_f or category_f == "enrichment":
+                q = db.query(DocumentEnrichment)
+                if datasource_f:
+                    q = q.filter(DocumentEnrichment.datasource == datasource_f)
+                for row in q.all():
+                    rows.append({
+                        "category":     "enrichment",
+                        "task_type":    "enrichment",
+                        "status":       row.status,
+                        "generated_at": row.generated_at,
+                        "started_at":   row.started_at,
+                        "updated_at":   row.updated_at or row.generated_at,
+                    })
+
+        # ── Timing stats (only for tasks with started_at) ──────────────────────
+        timing_buckets: dict = {}  # key=(category,task_type) → lists of ms values
+        for r in rows:
+            if not r["started_at"] or not r["generated_at"]:
+                continue
+            gen = r["generated_at"]
+            start = r["started_at"]
+            upd   = r["updated_at"]
+            if gen.tzinfo is None:
+                gen = gen.replace(tzinfo=timezone.utc)
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if upd and upd.tzinfo is None:
+                upd = upd.replace(tzinfo=timezone.utc)
+
+            queue_ms = int((start - gen).total_seconds() * 1000)
+            exec_ms  = int((upd - start).total_seconds() * 1000) if upd and r["status"] in ("complete", "error") else None
+            total_ms = int((upd - gen).total_seconds() * 1000) if upd and r["status"] in ("complete", "error") else None
+
+            key = (r["category"], r["task_type"])
+            if key not in timing_buckets:
+                timing_buckets[key] = {"queue": [], "exec": [], "total": []}
+            if queue_ms >= 0:
+                timing_buckets[key]["queue"].append(queue_ms)
+            if exec_ms is not None and exec_ms >= 0:
+                timing_buckets[key]["exec"].append(exec_ms)
+            if total_ms is not None and total_ms >= 0:
+                timing_buckets[key]["total"].append(total_ms)
+
+        def _avg(lst):
+            return round(sum(lst) / len(lst)) if lst else None
+
+        timing = []
+        for (cat, ttype), data in timing_buckets.items():
+            timing.append({
+                "category":      cat,
+                "task_type":     ttype,
+                "avg_queue_ms":  _avg(data["queue"]),
+                "avg_exec_ms":   _avg(data["exec"]),
+                "avg_total_ms":  _avg(data["total"]),
+                "sample_count":  len(data["queue"]),
+            })
+
+        # ── Throughput — tasks completed within each window ────────────────────
+        windows = {
+            "5m":  5   * 60,
+            "1h":  1   * 3600,
+            "12h": 12  * 3600,
+            "1d":  24  * 3600,
+            "7d":  7   * 24 * 3600,
+        }
+        throughput = {}
+        for label, secs in windows.items():
+            cutoff = now_utc.replace(tzinfo=None) - __import__("datetime").timedelta(seconds=secs)
+            count = sum(
+                1 for r in rows
+                if r["status"] == "complete"
+                and r["updated_at"]
+                and (r["updated_at"].replace(tzinfo=None) if r["updated_at"].tzinfo else r["updated_at"]) >= cutoff
+            )
+            throughput[label] = count
+
+        # ── Status distribution ────────────────────────────────────────────────
+        status_dist: dict = {}
+        for r in rows:
+            status_dist[r["status"]] = status_dist.get(r["status"], 0) + 1
+
+        # ── Type distribution ──────────────────────────────────────────────────
+        type_dist: dict = {}
+        for r in rows:
+            k = r["task_type"]
+            type_dist[k] = type_dist.get(k, 0) + 1
+
+        # ── Time series for chart (completed tasks bucketed into 1h slots for 7d)
+        from collections import defaultdict
+        series: dict = defaultdict(int)
+        for r in rows:
+            if r["status"] == "complete" and r["updated_at"]:
+                upd = r["updated_at"]
+                if upd.tzinfo is None:
+                    upd = upd.replace(tzinfo=timezone.utc)
+                age_secs = (now_utc - upd).total_seconds()
+                if age_secs <= 7 * 24 * 3600:
+                    # Bucket to nearest hour
+                    bucket_ts = int(upd.timestamp() // 3600 * 3600)
+                    series[bucket_ts] += 1
+
+        time_series = sorted(
+            [{"ts": ts * 1000, "count": cnt} for ts, cnt in series.items()],
+            key=lambda x: x["ts"],
+        )
+
+        return {
+            "timing":      timing,
+            "throughput":  throughput,
+            "status_dist": status_dist,
+            "type_dist":   type_dist,
+            "time_series": time_series,
+            "total_tasks": len(rows),
+        }, 200
+
+    except Exception as e:
+        logger.error(f"[api] tasks_analytics_handler error: {e}", exc_info=True)
+        return {"error": str(e)}, 500
 
 
 def documents_status_handler(app, operation, request, **kwargs):

@@ -16,7 +16,7 @@
 - [x] **`.env.example`** — All environment variables documented with sensible defaults
 - [x] **`Makefile`** — `infra`, `up`, `down`, `backend`, `frontend`, `test`, `seed-es` targets
 - [x] **Ollama GPU support** — nvidia-container-toolkit passthrough, `OLLAMA_KEEP_ALIVE=24h`
-- [x] **Model pulled** — `qwen2.5:7b` running at `http://localhost:11434/v1`
+- [x] **Model pulled** — `qwen3.5:9b` running at `http://localhost:11434/v1`
 - [x] **Elasticsearch seeded** — 30,000 realistic QSINT intelligence documents (Faker-generated)
 
 #### Backend — QF Framework

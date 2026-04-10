@@ -129,13 +129,21 @@ class PromptBuilder:
     """Assembles LLM-ready messages from retrieved chunks + conversation history."""
 
     def build_enrichment_messages(self, document_text: str) -> tuple[list[dict], str]:
-        """Build the messages list for full document enrichment (all fields at once)."""
+        """Build the messages list for full document enrichment (all fields at once).
+
+        Document text goes AFTER the schema so the model reads instruction → schema
+        → document in order. When thinking is suppressed (/no_think) the model
+        would otherwise interpret "Analyze the following document..." (embedded in
+        the schema prompt) as a new instruction expecting more input, and reply with
+        a "ready" template instead of performing the extraction.
+        """
         messages = [{
             "role": "user",
             "content": (
-                f"Document:\n{document_text}\n\n---\n"
-                "Analyze the above document and output structured JSON.\n\n"
-                f"REQUIRED SCHEMA (output ONLY this JSON, no extra text):\n{INSIGHTS_ENRICH_PROMPT}"
+                "Extract structured intelligence from the document text at the bottom.\n"
+                "Return ONLY a valid JSON object matching this schema exactly:\n\n"
+                f"{INSIGHTS_ENRICH_PROMPT}\n\n"
+                f"=== DOCUMENT ===\n{document_text}"
             ),
         }]
         return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
@@ -154,7 +162,7 @@ class PromptBuilder:
         prompt = field_prompt_map.get(field, INSIGHTS_ENRICH_PROMPT)
         messages = [{
             "role": "user",
-            "content": f"Document:\n{document_text}\n\n---\n{prompt}",
+            "content": f"{prompt}\n\n=== DOCUMENT ===\n{document_text}",
         }]
         return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
 
@@ -162,7 +170,7 @@ class PromptBuilder:
         """Build messages to translate a document to Romanian."""
         messages = [{
             "role": "user",
-            "content": f"Text to translate to Romanian:\n{document_text}\n\n---\n{ENRICH_TRANSLATION_PROMPT}",
+            "content": f"{ENRICH_TRANSLATION_PROMPT}\n\n=== TEXT TO TRANSLATE ===\n{document_text}",
         }]
         return messages, "You are a professional translator. Output ONLY valid JSON."
 
@@ -219,9 +227,10 @@ class PromptBuilder:
         messages = [{
             "role": "user",
             "content": (
-                f"Corpus ({len(docs)} documents):\n{doc_lines}\n\n---\n"
-                f"Analyse ALL {len(docs)} documents above and output structured JSON for {task_type}.\n\n"
-                f"REQUIRED SCHEMA (You MUST output ONLY valid JSON matching this exact structure):\n{system_prompt}"
+                f"Analyse ALL {len(docs)} documents below and output structured JSON for {task_type}.\n"
+                f"Return ONLY a valid JSON object matching this schema exactly:\n\n"
+                f"{system_prompt}\n\n"
+                f"=== CORPUS ({len(docs)} documents) ===\n{doc_lines}"
             ),
         }]
 

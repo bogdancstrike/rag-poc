@@ -206,12 +206,17 @@ class InsightsEngine:
                 logger.debug(f"[insights] LLM response: {raw[:500]}...")
                 
                 payload = self._parse_json(raw)
-                if not payload:
+                if payload is None:
                     logger.error(f"[insights] {ttype} JSON parse fail. Raw output: {raw[:500]}...")
                     raise ValueError(f"Failed to parse {ttype} JSON from LLM")
-                
+
+                # Empty dict {} means LLM produced no useful output — store as complete
+                # with empty payload rather than failing, so the UI doesn't show an error.
+                if not payload:
+                    logger.warning(f"[insights] {ttype} returned empty JSON — storing as complete with no data")
+
                 self._set_task_status(datasource, ttype, "complete", sample_hash, payload=payload)
-                logger.info(f"[insights] Task {ttype} complete")
+                logger.info(f"[insights] Task {ttype} complete", "magenta")
             except Exception as e:
                 logger.error(f"[insights] Task {ttype} failed: {e}")
                 self._set_task_status(datasource, ttype, "error", sample_hash, error=str(e))
@@ -289,39 +294,49 @@ class InsightsEngine:
     def _set_task_status(self, datasource: str, ttype: str, status: str, sample_hash: str,
                          payload=None, error=None, clear_data=False):
         """Persist task status to DB and broadcast to SSE subscribers."""
-        from src.session.models import InsightsCache, get_db
+        from src.session.models import InsightsCache, get_db, get_engine
         with _lock:
-            try:
-                with get_db() as db:
-                    row = db.query(InsightsCache).filter(
-                        InsightsCache.datasource == datasource,
-                        InsightsCache.insight_type == ttype
-                    ).first()
-                    if not row:
-                        row = InsightsCache(datasource=datasource, insight_type=ttype)
-                        db.add(row)
-                    row.status = status
-                    row.sample_hash = sample_hash
-                    row.generated_at = datetime.now(timezone.utc)
-                    if clear_data:
-                        row.payload = None
-                        row.error = None
-                    else:
-                        if payload is not None:
-                            row.payload = payload
-                        if error is not None:
-                            row.error = error
-                    db.commit()
-                    snapshot = row.to_dict()
+            for attempt in range(2):
+                try:
+                    with get_db() as db:
+                        row = db.query(InsightsCache).filter(
+                            InsightsCache.datasource == datasource,
+                            InsightsCache.insight_type == ttype
+                        ).first()
+                        if not row:
+                            row = InsightsCache(datasource=datasource, insight_type=ttype)
+                            db.add(row)
+                        row.status = status
+                        row.sample_hash = sample_hash
+                        row.generated_at = datetime.now(timezone.utc)
+                        if clear_data:
+                            row.payload = None
+                            row.error = None
+                        else:
+                            if payload is not None:
+                                row.payload = payload
+                            if error is not None:
+                                row.error = error
+                        db.commit()
+                        snapshot = row.to_dict()
 
-                # Notify SSE subscribers that a task changed
-                _event_bus.publish(datasource, {
-                    "type":         "task_update",
-                    "insight_type": ttype,
-                    "task":         snapshot,
-                })
-            except Exception as e:
-                logger.error(f"[insights] Failed DB update for {ttype}: {e}")
+                    # Notify SSE subscribers that a task changed
+                    _event_bus.publish(datasource, {
+                        "type":         "task_update",
+                        "insight_type": ttype,
+                        "task":         snapshot,
+                    })
+                    break  # success
+                except Exception as e:
+                    if attempt == 0:
+                        # Invalidate all stale connections and retry once
+                        logger.warning(f"[insights] DB update failed for {ttype}, retrying: {e}")
+                        try:
+                            get_engine().dispose()
+                        except Exception:
+                            pass
+                    else:
+                        logger.error(f"[insights] Failed DB update for {ttype}: {e}")
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
