@@ -1,11 +1,11 @@
 import {
   Row, Col, Card, Spin, Alert, Button, Tag, Typography, Space, Tooltip,
-  Divider, theme, Table, Tabs, List, Badge, Progress,
+  Divider, theme, Table, List, Badge, Progress,
 } from 'antd'
 import {
-  ReloadOutlined, FireOutlined, RiseOutlined, TeamOutlined, WarningOutlined,
+  ReloadOutlined, FireOutlined, RiseOutlined, WarningOutlined, BookOutlined,
   ClockCircleOutlined, SyncOutlined, BarChartOutlined, NodeIndexOutlined,
-  DeleteOutlined, SendOutlined, TableOutlined, BulbOutlined, BookOutlined,
+  DeleteOutlined, SendOutlined,
   GlobalOutlined, AlertOutlined, MessageOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -13,10 +13,8 @@ import utc from 'dayjs/plugin/utc'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { useInsights, useRefreshInsights, useDeleteInsights, useRefreshTask } from '@/hooks/useInsights'
 import { TrendAreaChart } from './TrendAreaChart'
-import { EntityBarChart } from './EntityBarChart'
 import { RelationshipGraph } from './RelationshipGraph'
 import { WordCloud } from './WordCloud'
-import { DataTable } from '@/components/explore/DataTable'
 
 dayjs.extend(utc)
 dayjs.extend(relativeTime)
@@ -72,12 +70,12 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
   const tasks       = insights?.tasks || {}
   const meta        = insights?._meta
   const summaryTask = tasks.summary || { status: 'pending' }
-  const nerTask     = tasks.ner     || { status: 'pending' }
   const graphTask   = tasks.graph   || { status: 'pending' }
   const statsTask   = tasks.stats   || { status: 'pending' }
 
+  const activeTaskKeys = ['summary', 'graph', 'stats']
   const isProcessing = meta?.is_processing ||
-    Object.values(tasks).some((t: any) => t.status === 'processing' || t.status === 'pending')
+    activeTaskKeys.some((k) => tasks[k]?.status === 'processing' || tasks[k]?.status === 'pending')
 
   const generatedAt = summaryTask.generated_at
     ? dayjs.utc(summaryTask.generated_at).local().fromNow()
@@ -163,15 +161,6 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
             .join('\n'),
       )
     }
-    if (nerTask.payload?.entities?.length) {
-      parts.push(
-        'Key Entities:\n' +
-          nerTask.payload.entities
-            .slice(0, 10)
-            .map((e: any) => `- ${e.name} (${e.type})`)
-            .join('\n'),
-      )
-    }
     onSendToRag([{ title: 'Intelligence Report Summary', text: parts.join('\n\n') }])
   }
 
@@ -202,7 +191,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                   size="small"
                   icon={<SendOutlined />}
                   onClick={handleSendInsightsToRag}
-                  disabled={!summaryTask.payload && !nerTask.payload}
+                  disabled={!summaryTask.payload}
                 >
                   Send to RAG
                 </Button>
@@ -307,7 +296,8 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                       label: t.label,
                       value: t.value,
                     }))}
-                    height={120}
+                    maxWords={30}
+                    height={240}
                   />
                 </div>
               </div>
@@ -512,32 +502,6 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
         ) : renderLoading()}
       </Card>
 
-      {/* ── Named Entities ── */}
-      <Card
-        variant="borderless"
-        title={renderTaskHeader('Identified Entities (NER)', nerTask,
-          <TeamOutlined style={{ color: token.colorPrimary }} />, 'ner', 'ai')}
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-        styles={{ body: { padding: '8px 16px 16px' } }}
-      >
-        {nerTask.payload ? (
-          <div>
-            <EntityBarChart entities={nerTask.payload.entities || []} height={200} />
-            {nerTask.payload.entities?.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <WordCloud
-                  words={nerTask.payload.entities.map((e: any) => ({
-                    label: e.name,
-                    value: e.frequency || 1,
-                  }))}
-                  height={100}
-                />
-              </div>
-            )}
-          </div>
-        ) : renderLoading()}
-      </Card>
-
       {/* ── Relationship Network (D3 graph) ── */}
       <Card
         variant="borderless"
@@ -550,45 +514,12 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
           <RelationshipGraph
             nodes={graphTask.payload.nodes || []}
             edges={graphTask.payload.edges || []}
-            height={380}
+            height={560}
           />
         ) : renderLoading()}
       </Card>
     </div>
   )
 
-  return (
-    <Tabs
-      defaultActiveKey="report"
-      size="small"
-      items={[
-        {
-          key: 'report',
-          label: (
-            <Space>
-              <BulbOutlined />
-              Intelligence Report
-              {isProcessing && <SyncOutlined spin style={{ fontSize: 10 }} />}
-            </Space>
-          ),
-          children: reportTab,
-        },
-        {
-          key: 'data',
-          label: (
-            <Space>
-              <TableOutlined />
-              Raw Data
-            </Space>
-          ),
-          children: (
-            <div style={{ height: 'calc(100vh - 180px)' }}>
-              <DataTable datasource={datasource} onSendToRag={onSendToRag} />
-            </div>
-          ),
-        },
-      ]}
-      tabBarStyle={{ marginBottom: 0, paddingBottom: 8 }}
-    />
-  )
+  return reportTab
 }

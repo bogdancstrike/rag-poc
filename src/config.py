@@ -45,7 +45,11 @@ class Config:
 
     # ── Insights ───────────────────────────────────────────────────────────────
     INSIGHTS_CACHE_TTL = int(os.getenv("INSIGHTS_CACHE_TTL", "1800"))  # seconds
-    INSIGHTS_MAX_DOCS  = int(os.getenv("INSIGHTS_MAX_DOCS", "40"))   # keep prompt within ~8K tokens
+    # How many docs to sample for AI analysis. Titles+topics only are sent to the
+    # LLM so a large sample fits comfortably within the context window.
+    INSIGHTS_MAX_DOCS  = int(os.getenv("INSIGHTS_MAX_DOCS", "500"))
+    # Hard cap used only when full text is needed (enrichment etc.)
+    INSIGHTS_MAX_DOCS_FULL_TEXT = int(os.getenv("INSIGHTS_MAX_DOCS_FULL_TEXT", "40"))
 
     # ── Kafka / Worker (required by QF framework at import time — unused for RAG) ──
     WORKER_NAME              = os.getenv("WORKER_NAME", "qsint-rag")

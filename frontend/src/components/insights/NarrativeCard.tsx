@@ -40,7 +40,7 @@ export function NarrativeCard({ narrative, sentiment = 'neutral', onAskAbout }: 
       }}
       styles={{ body: { padding: '12px 16px' } }}
     >
-      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={4} style={{ width: '100%' }}>
         <Space style={{ justifyContent: 'space-between', width: '100%' }}>
           <Text strong style={{ fontSize: 13 }}>{narrative.title}</Text>
           <Tag color={tag.color}>{tag.label}</Tag>

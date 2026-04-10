@@ -261,6 +261,17 @@
         "module_name": "api.endpoints",
         "method_name": "task_detail_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_documents_status",
+      "model_name": "Empty",
+      "request_method": ["GET", "POST"],
+      "api_url": "/v1/documents/status",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "documents_status_handler"
+      }
     }
   ]
 }

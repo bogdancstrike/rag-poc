@@ -129,7 +129,7 @@ class InsightsEngine:
             if needs_refresh:
                 logger.info(f"[insights] Scheduling coordinator for {datasource} (forced={force_refresh})")
                 # Immediately mark tasks as pending so the frontend sees activity
-                for ttype in ["summary", "ner", "graph", "stats"]:
+                for ttype in ["summary", "graph", "stats"]:
                     self._set_task_status(datasource, ttype, "pending", "coordinator_scheduled",
                                           clear_data=force_refresh)
                 # Run the heavy coordinator (ES sample fetch + task dispatch) in background
@@ -168,7 +168,7 @@ class InsightsEngine:
             sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
             if not sample:
                 logger.warning(f"[insights] Coordinator: no documents for {datasource}")
-                for ttype in ["summary", "ner", "graph", "stats"]:
+                for ttype in ["summary", "graph", "stats"]:
                     self._set_task_status(datasource, ttype, "error", "no_docs",
                                           error="No documents found in datasource")
                 return
@@ -179,12 +179,12 @@ class InsightsEngine:
             self._trigger_tasks(datasource, sample, sample_hash)
         except Exception as e:
             logger.error(f"[insights] Coordinator failed for {datasource}: {e}", exc_info=True)
-            for ttype in ["summary", "ner", "graph", "stats"]:
+            for ttype in ["summary", "graph", "stats"]:
                 self._set_task_status(datasource, ttype, "error", "coordinator_failed", error=str(e))
 
     def _trigger_tasks(self, datasource: str, sample: List[dict], sample_hash: str):
         """Submit all insight tasks to the executor."""
-        tasks = ["summary", "ner", "graph", "stats"]
+        tasks = ["summary", "graph", "stats"]
         for ttype in tasks:
             self._set_task_status(datasource, ttype, "pending", sample_hash, clear_data=True)
             if ttype == "stats":

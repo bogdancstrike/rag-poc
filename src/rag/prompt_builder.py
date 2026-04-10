@@ -45,20 +45,21 @@ FORMAT RULES:
 3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
 """
 
-INSIGHTS_GRAPH_PROMPT = """Detect relationships between named entities (people, organizations, locations, tools, events) in the documents.
-Build a concise knowledge graph — do NOT use document IDs as node IDs.
+INSIGHTS_GRAPH_PROMPT = """Detect relationships between named entities (people, organizations, locations, tools, events) across ALL provided documents.
+Build a rich knowledge graph that captures the full breadth of relationships in the corpus — do NOT use document IDs as node IDs.
 
 FORMAT RULES:
 1. Output ONLY valid JSON, no markdown, no comments.
 2. Use the entity name itself as the node "id" (e.g., "LockBit", "SVR", "Ukraine").
-3. Limit to 10-15 nodes and at most 20 edges.
-4. The JSON must have EXACTLY this structure:
+3. Aim for 30-60 nodes and 60-120 edges. More is better — cover the full corpus.
+4. Assign each node a "community" integer (0-based) grouping related entities into discovered communities/clusters.
+5. The JSON must have EXACTLY this structure:
 {
-  "nodes": [{"id": "EntityName", "label": "EntityName", "type": "person|org|location|tool|event"}],
+  "nodes": [{"id": "EntityName", "label": "EntityName", "type": "person|org|location|tool|event", "community": 0}],
   "edges": [{"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}]
 }
-5. "source" and "target" in edges MUST match node "id" values exactly.
-6. Do NOT include any other top-level keys.
+6. "source" and "target" in edges MUST match node "id" values exactly.
+7. Do NOT include any other top-level keys.
 """
 
 # ── Per-field enrichment prompts ───────────────────────────────────────────────
@@ -148,22 +149,41 @@ class PromptBuilder:
     # ── Insights prompt ─────────────────────────────────────────────────────────
 
     def build_insights_messages(self, sample_docs: list[dict], task_type: str = "summary") -> tuple[list[dict], str]:
-        """Build the messages list for the insights generation call."""
-        doc_texts = "\n\n".join(
-            f'<doc id="{doc["id"]}">{doc["text"][:300]}</doc>'
-            for doc in sample_docs[:Config.INSIGHTS_MAX_DOCS]
-        )
+        """Build the messages list for the insights generation call.
+
+        Sends lightweight one-line entries (title + topic + sentiment + 120-char
+        snippet) instead of full text so that up to 500 documents fit within the
+        LLM context window while still giving the model the breadth of the corpus.
+        """
+        docs = sample_docs[:Config.INSIGHTS_MAX_DOCS]
+
+        def _fmt(doc: dict) -> str:
+            title     = (doc.get("title") or "").strip()[:80]
+            topic     = doc.get("topic", "")
+            sentiment = doc.get("sentiment", "")
+            snippet   = (doc.get("text") or "").strip()[:120].replace("\n", " ")
+            parts = []
+            if title:     parts.append(f"title={title!r}")
+            if topic:     parts.append(f"topic={topic!r}")
+            if sentiment: parts.append(f"sentiment={sentiment!r}")
+            if snippet:   parts.append(f"snippet={snippet!r}")
+            return f"[{', '.join(parts)}]"
+
+        doc_lines = "\n".join(_fmt(d) for d in docs)
 
         prompt_map = {
             "summary": INSIGHTS_SUMMARY_PROMPT,
-            "ner":     INSIGHTS_NER_PROMPT,
             "graph":   INSIGHTS_GRAPH_PROMPT,
         }
         system_prompt = prompt_map.get(task_type, INSIGHTS_SUMMARY_PROMPT)
 
         messages = [{
             "role": "user",
-            "content": f"Documents:\n{doc_texts}\n\n---\nAnalyse the above {len(sample_docs)} documents and output structured JSON for {task_type}.\n\nREQUIRED SCHEMA (You MUST output ONLY valid JSON matching this exact structure):\n{system_prompt}",
+            "content": (
+                f"Corpus ({len(docs)} documents):\n{doc_lines}\n\n---\n"
+                f"Analyse ALL {len(docs)} documents above and output structured JSON for {task_type}.\n\n"
+                f"REQUIRED SCHEMA (You MUST output ONLY valid JSON matching this exact structure):\n{system_prompt}"
+            ),
         }]
 
         return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."

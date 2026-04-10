@@ -139,7 +139,7 @@ export function MessageBubble({ message }: Props) {
                                 style={{ fontSize: 11, height: 20, padding: '0 4px' }}
                                 onClick={() =>
                                   navigate(
-                                    `/explore/${encodeURIComponent(datasource)}/${encodeURIComponent(docId)}`
+                                    `/index/${encodeURIComponent(datasource)}/${encodeURIComponent(docId)}`
                                   )
                                 }
                               >

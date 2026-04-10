@@ -123,6 +123,30 @@ class InsightsCache(Base):
         }
 
 
+class DocumentStatus(Base):
+    """Analyst-assigned review status for a document.
+
+    Statuses: 'in_progress' | 'done'
+    A missing row means no status has been set.
+    """
+    __tablename__ = "rag_document_status"
+
+    doc_id     = Column(String(255), primary_key=True)
+    datasource = Column(String(100), primary_key=True)
+    status     = Column(String(20),  nullable=False)   # 'in_progress' | 'done'
+    updated_at = Column(DateTime, nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "doc_id":     self.doc_id,
+            "datasource": self.datasource,
+            "status":     self.status,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class DocumentEnrichment(Base):
     """Cache for AI enrichment (sentiment, NER, classification, summary) on a single document."""
     __tablename__ = "rag_document_enrichment"

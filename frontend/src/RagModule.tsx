@@ -209,6 +209,11 @@ function IndexPage() {
     }
   }, [storePending])
 
+  // When a docId appears in the URL (e.g. "Go to doc" from chat), switch to data tab
+  useEffect(() => {
+    if (docId) setActiveTab('data')
+  }, [docId])
+
   const handleDocSelect = (doc: any | null) => {
     if (doc) {
       navigate(`/index/${encodeURIComponent(datasource)}/${encodeURIComponent(doc.id)}`, { replace: true })

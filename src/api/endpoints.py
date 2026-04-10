@@ -1082,3 +1082,49 @@ def task_detail_handler(app, operation, request, task_id: str = "", **kwargs):
         except Exception as e:
             logger.error(f"[api] task_detail_handler error: {e}", exc_info=True)
             return {"error": str(e)}, 500
+
+
+def documents_status_handler(app, operation, request, **kwargs):
+    """GET|POST /v1/documents/status — fetch or set analyst review status for documents.
+
+    GET  ?datasource=x          → { "statuses": { doc_id: "in_progress"|"done" } }
+    POST { datasource, doc_id, status }
+         status = "in_progress" | "done" | null (null clears the status)
+    """
+    from src.session.models import DocumentStatus, get_db
+
+    method = flask_request.method
+
+    if method == "GET":
+        datasource = flask_request.args.get("datasource")
+        if not datasource:
+            return {"error": "datasource is required"}, 400
+        with get_db() as db:
+            rows = db.query(DocumentStatus).filter_by(datasource=datasource).all()
+            statuses = {r.doc_id: r.status for r in rows}
+        return {"statuses": statuses}, 200
+
+    # POST — upsert or clear
+    body = _json()
+    datasource = body.get("datasource")
+    doc_id     = body.get("doc_id")
+    status     = body.get("status")   # None/null means clear
+
+    if not datasource or not doc_id:
+        return {"error": "datasource and doc_id are required"}, 400
+    if status is not None and status not in ("in_progress", "done"):
+        return {"error": "status must be 'in_progress', 'done', or null"}, 400
+
+    with get_db() as db:
+        row = db.query(DocumentStatus).filter_by(doc_id=doc_id, datasource=datasource).first()
+        if status is None:
+            if row:
+                db.delete(row)
+        elif row:
+            row.status = status
+            row.updated_at = datetime.now(timezone.utc)
+        else:
+            row = DocumentStatus(doc_id=doc_id, datasource=datasource, status=status)
+            db.add(row)
+
+    return {"doc_id": doc_id, "datasource": datasource, "status": status}, 200
