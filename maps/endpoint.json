@@ -165,6 +165,17 @@
     },
     {
       "namespace": "rag",
+      "operation_name": "v1_documents_enrich_stream",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/documents/enrich/stream",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "document_enrich_stream_handler"
+      }
+    },
+    {
+      "namespace": "rag",
       "operation_name": "v1_insights_task_refresh",
       "model_name": "Empty",
       "request_method": ["POST"],
@@ -271,6 +282,17 @@
       "exec_method": {
         "module_name": "api.endpoints",
         "method_name": "documents_status_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_documents_labels",
+      "model_name": "Empty",
+      "request_method": ["GET", "POST"],
+      "api_url": "/v1/documents/labels",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "documents_labels_handler"
       }
     }
   ]

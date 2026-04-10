@@ -39,7 +39,7 @@ class Config:
     # Set to 0.0 to disable filtering (keep all retrieved chunks).
     RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.15"))
     # Max chunks passed to the LLM after score filtering
-    RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "8"))
+    RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "20"))
     # Max conversation history turns injected into prompt
     HISTORY_TURNS = int(os.getenv("HISTORY_TURNS", "10"))
 

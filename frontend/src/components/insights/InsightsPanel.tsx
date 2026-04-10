@@ -21,12 +21,18 @@ dayjs.extend(relativeTime)
 
 const { Title, Text, Paragraph } = Typography
 
+/** Normalise any LLM sentiment value to the three canonical values. */
+function normaliseSentiment(raw?: string): 'positive' | 'negative' | 'neutral' {
+  const s = (raw || '').toLowerCase()
+  if (s === 'positive' || s === 'supportive') return 'positive'
+  if (s === 'negative' || s === 'hostile' || s === 'mixed') return 'negative'
+  return 'neutral'
+}
+
 const SENTIMENT_COLOR: Record<string, string> = {
   positive: 'success',
   negative: 'error',
   neutral:  'default',
-  mixed:    'warning',
-  hostile:  'error',
 }
 
 const DIRECTION_ICON: Record<string, any> = {
@@ -296,8 +302,8 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                       label: t.label,
                       value: t.value,
                     }))}
-                    maxWords={30}
-                    height={240}
+                    maxWords={50}
+                    height={280}
                   />
                 </div>
               </div>
@@ -317,15 +323,14 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
         {summaryTask.payload ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {(summaryTask.payload.hot_topics || []).slice(0, 10).map((t: any, i: number) => {
+              const sent = normaliseSentiment(t.sentiment)
               const sentColor =
-                t.sentiment === 'positive' ? token.colorSuccess :
-                t.sentiment === 'negative' || t.sentiment === 'hostile' ? token.colorError :
-                t.sentiment === 'mixed' ? token.colorWarning :
+                sent === 'positive' ? token.colorSuccess :
+                sent === 'negative' ? token.colorError :
                 token.colorTextSecondary
               const bgColor =
-                t.sentiment === 'positive' ? 'rgba(82,196,26,0.06)' :
-                t.sentiment === 'negative' || t.sentiment === 'hostile' ? 'rgba(255,77,79,0.06)' :
-                t.sentiment === 'mixed' ? 'rgba(250,173,20,0.06)' :
+                sent === 'positive' ? 'rgba(82,196,26,0.06)' :
+                sent === 'negative' ? 'rgba(255,77,79,0.06)' :
                 token.colorFillAlter
               const max = Math.max(...(summaryTask.payload.hot_topics || []).map((x: any) => x.count_estimate || 0), 1)
               const pct = Math.round(((t.count_estimate || 0) / max) * 100)
@@ -344,10 +349,10 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                     <Space size={8} style={{ flex: 1, minWidth: 0 }}>
                       <Text strong style={{ fontSize: 13 }}>{t.topic}</Text>
                       <Tag
-                        color={SENTIMENT_COLOR[t.sentiment] || 'default'}
+                        color={SENTIMENT_COLOR[sent]}
                         style={{ fontSize: 10, margin: 0, flexShrink: 0 }}
                       >
-                        {t.sentiment?.toUpperCase() || 'N/A'}
+                        {sent.toUpperCase()}
                       </Tag>
                     </Space>
                     <Space size={6} style={{ flexShrink: 0, marginLeft: 12 }}>

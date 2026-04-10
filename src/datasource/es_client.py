@@ -169,7 +169,7 @@ class ESClient:
                 "aggs": {
                     "platforms": {"terms": {"field": "platform.keyword", "size": 10}},
                     "regions": {"terms": {"field": "region.keyword", "size": 10}},
-                    "topics": {"terms": {"field": "topic.keyword", "size": 10}},
+                    "topics": {"terms": {"field": "topic.keyword", "size": 50}},
                     "sentiments": {"terms": {"field": "sentiment.keyword", "size": 10}},
                     "entities": {"terms": {"field": "entity.keyword", "size": 10}},
                 }
@@ -187,25 +187,59 @@ class ESClient:
             logger.error(f"[es] get_aggregations error: {e}")
             return {}
 
-    def get_documents(self, index_name: str = None, offset: int = 0, limit: int = 50, query: str = None) -> tuple[list[dict], int]:
-        """Get raw documents for tabular exploration. Returns (docs, total_count)."""
+    def get_documents(
+        self,
+        index_name: str = None,
+        offset: int = 0,
+        limit: int = 50,
+        query: str = None,
+        id_filter: Optional[list] = None,
+        sentiment_filter: Optional[str] = None,
+    ) -> tuple[list[dict], int]:
+        """Get raw documents for tabular exploration. Returns (docs, total_count).
+
+        Args:
+            id_filter:        If provided, restrict results to these document IDs.
+                              Pass an empty list [] to indicate no docs match (returns 0 results).
+            sentiment_filter: If provided, add a term filter on the sentiment.keyword field.
+        """
         idx = index_name or self._default_index
+
+        # Caller signals "no matching docs" by passing an empty id list
+        if id_filter is not None and len(id_filter) == 0:
+            return [], 0
+
         try:
+            filters = []
+            if id_filter:
+                filters.append({"ids": {"values": id_filter}})
+            if sentiment_filter:
+                filters.append({"term": {"sentiment.keyword": sentiment_filter}})
+
+            if query:
+                text_query = {
+                    "query_string": {"query": query, "default_operator": "AND"}
+                }
+            else:
+                text_query = {"match_all": {}}
+
+            if filters:
+                body_query = {
+                    "bool": {
+                        "must": text_query,
+                        "filter": filters,
+                    }
+                }
+            else:
+                body_query = text_query
+
             body = {
                 "from": offset,
                 "size": limit,
                 "_source": True,
-                "sort": [{"created_at": {"order": "desc", "unmapped_type": "date"}}]
+                "sort": [{"created_at": {"order": "desc", "unmapped_type": "date"}}],
+                "query": body_query,
             }
-            if query:
-                body["query"] = {
-                    "query_string": {
-                        "query": query,
-                        "default_operator": "AND"
-                    }
-                }
-            else:
-                body["query"] = {"match_all": {}}
 
             resp = self._client.search(index=idx, body=body)
             hits = resp["hits"]["hits"]

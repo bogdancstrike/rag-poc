@@ -147,6 +147,31 @@ class DocumentStatus(Base):
         }
 
 
+class DocumentLabel(Base):
+    """Analyst-assigned labels/tags for a document.
+
+    Labels are arbitrary strings (e.g. case names, campaign IDs) that help
+    analysts find related documents across different search sessions.
+    A missing row means no labels have been assigned.
+    """
+    __tablename__ = "rag_document_labels"
+
+    doc_id     = Column(String(255), primary_key=True)
+    datasource = Column(String(100), primary_key=True)
+    labels     = Column(JSON, nullable=False, default=list)  # ["label1", "label2"]
+    updated_at = Column(DateTime, nullable=False,
+                        default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "doc_id":     self.doc_id,
+            "datasource": self.datasource,
+            "labels":     self.labels or [],
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class DocumentEnrichment(Base):
     """Cache for AI enrichment (sentiment, NER, classification, summary) on a single document."""
     __tablename__ = "rag_document_enrichment"

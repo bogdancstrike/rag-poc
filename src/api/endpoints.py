@@ -6,6 +6,9 @@ All functions follow the QF Framework pattern:
 SSE streaming endpoints return a Flask Response object directly.
 """
 import json
+import re
+import urllib.request
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 
@@ -46,6 +49,63 @@ def _cors_headers():
         "Access-Control-Allow-Headers": "Content-Type",
         "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     }
+
+
+# ── IOC extraction ─────────────────────────────────────────────────────────────
+
+_RE_IP       = re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b')
+_RE_URL      = re.compile(r'https?://[^\s<>"\'{}|\\^`\[\]]+', re.IGNORECASE)
+_RE_EMAIL    = re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,7}\b')
+_RE_MD5      = re.compile(r'\b[a-fA-F0-9]{32}\b')
+_RE_SHA1     = re.compile(r'\b[a-fA-F0-9]{40}\b')
+_RE_SHA256   = re.compile(r'\b[a-fA-F0-9]{64}\b')
+_RE_CVE      = re.compile(r'\bCVE-\d{4}-\d{4,7}\b', re.IGNORECASE)
+_RE_PATH     = re.compile(r'(?:/(?:etc|var|home|tmp|usr|bin|sbin|opt|root|proc|sys|data|log)[/\w.\-]*|[A-Za-z]:\\[^\s<>"\']+)')
+_RE_HASHTAG  = re.compile(r'#[\w\u0400-\u04FF\u0600-\u06FF]{2,}')
+_RE_DOMAIN   = re.compile(
+    r'\b(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|gov|mil|edu|info|biz|onion'
+    r'|ru|cn|de|uk|fr|nl|xyz|app|cloud|online|site|tech|int|us|ca|au|jp|kr|br|in|pl|se|no|dk|fi)\b',
+    re.IGNORECASE,
+)
+
+
+def _extract_iocs(text: str) -> dict:
+    """Regex-based Indicator of Compromise extraction — no LLM required."""
+    urls  = list(set(_RE_URL.findall(text)))
+    clean = _RE_URL.sub(' ', text)          # avoid double-matching domains inside URLs
+    hashes = list(set(_RE_MD5.findall(text) + _RE_SHA1.findall(text) + _RE_SHA256.findall(text)))
+    return {
+        "ips":        list(set(_RE_IP.findall(text))),
+        "domains":    [d for d in set(_RE_DOMAIN.findall(clean)) if len(d) > 4],
+        "urls":       urls,
+        "emails":     list(set(_RE_EMAIL.findall(text))),
+        "hashes":     hashes,
+        "cves":       list(set(_RE_CVE.findall(text))),
+        "file_paths": list(set(_RE_PATH.findall(text))),
+        "hashtags":   list(set(_RE_HASHTAG.findall(text))),
+    }
+
+
+def _geocode_location(name: str) -> dict | None:
+    """Geocode a place name via Nominatim (OpenStreetMap). Returns None on failure."""
+    try:
+        params = urllib.parse.urlencode({"q": name, "format": "json", "limit": 1})
+        req = urllib.request.Request(
+            f"https://nominatim.openstreetmap.org/search?{params}",
+            headers={"User-Agent": "QSINT-RAG-Intelligence-Platform/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            results = json.loads(resp.read().decode())
+        if results:
+            return {
+                "name":         name,
+                "lat":          float(results[0]["lat"]),
+                "lon":          float(results[0]["lon"]),
+                "display_name": results[0].get("display_name", name),
+            }
+    except Exception as e:
+        logger.warning(f"[geocode] '{name}': {e}")
+    return None
 
 
 # ── Health ─────────────────────────────────────────────────────────────────────
@@ -447,17 +507,87 @@ def datasource_indices_handler(app, operation, request, **kwargs):
             return {"error": str(e)}, 500
 
 def documents_handler(app, operation, request, **kwargs):
-    """GET /v1/documents — get raw documents for tabular view."""
+    """GET /v1/documents — get raw documents for tabular view.
+
+    Optional filter params:
+      filter_sentiment    — match on sentiment.keyword field in ES
+      filter_status       — 'in_progress' | 'done' — resolved from PG
+      filter_labels       — comma-separated label values — resolved from PG
+      filter_classification — match on enrichment classification field in PG
+    """
     datasource = flask_request.args.get("datasource")
-    query = flask_request.args.get("query", "")
-    offset = int(flask_request.args.get("offset", 0))
-    limit = int(flask_request.args.get("limit", 50))
-    
+    query      = flask_request.args.get("query", "")
+    offset     = int(flask_request.args.get("offset", 0))
+    limit      = int(flask_request.args.get("limit", 50))
+
+    filter_sentiment      = flask_request.args.get("filter_sentiment", "").strip() or None
+    filter_status         = flask_request.args.get("filter_status", "").strip() or None
+    filter_labels_raw     = flask_request.args.get("filter_labels", "").strip()
+    filter_classification = flask_request.args.get("filter_classification", "").strip() or None
+
+    filter_labels = [l.strip() for l in filter_labels_raw.split(",") if l.strip()] if filter_labels_raw else []
+
     with tracer.start_as_current_span("api.documents") as span:
+        span.set_attribute("documents.datasource", datasource or "")
         try:
             from src.datasource.es_client import ESClient
+            from src.session.models import DocumentStatus, DocumentLabel, DocumentEnrichment, get_db
+
+            # Resolve PG-based filters to a set of matching doc IDs
+            id_filter = None  # None means "no restriction"
+
+            if filter_status or filter_labels or filter_classification:
+                id_sets = []
+
+                if filter_status:
+                    with get_db() as db:
+                        rows = db.query(DocumentStatus.doc_id).filter_by(
+                            datasource=datasource, status=filter_status
+                        ).all()
+                    id_sets.append({r.doc_id for r in rows})
+
+                if filter_labels:
+                    # A document must have ALL requested labels.
+                    # Build result dict inside the session to avoid DetachedInstanceError.
+                    with get_db() as db:
+                        rows = db.query(DocumentLabel).filter_by(datasource=datasource).all()
+                        rows_data = [(r.doc_id, list(r.labels or [])) for r in rows]
+                    matching = set()
+                    for doc_id_r, lbls in rows_data:
+                        row_labels = set(lbls)
+                        if all(lbl in row_labels for lbl in filter_labels):
+                            matching.add(doc_id_r)
+                    id_sets.append(matching)
+
+                if filter_classification:
+                    fc_lower = filter_classification.lower()
+                    # Build (doc_id, classification) pairs inside the session.
+                    with get_db() as db:
+                        enriched_rows = db.query(DocumentEnrichment).filter(
+                            DocumentEnrichment.datasource == datasource,
+                            DocumentEnrichment.status == "complete",
+                        ).all()
+                        enriched_data = [(e.doc_id, (e.payload or {}).get("classification", "") or "") for e in enriched_rows]
+                    matching = {doc_id_e for doc_id_e, cls in enriched_data if fc_lower in cls.lower()}
+                    id_sets.append(matching)
+
+                # Intersect all PG filter sets
+                if id_sets:
+                    combined = id_sets[0]
+                    for s in id_sets[1:]:
+                        combined = combined & s
+                    id_filter = list(combined)
+
             client = ESClient()
-            docs, total = client.get_documents(index_name=datasource, offset=offset, limit=limit, query=query)
+            docs, total = client.get_documents(
+                index_name=datasource,
+                offset=offset,
+                limit=limit,
+                query=query,
+                id_filter=id_filter,
+                sentiment_filter=filter_sentiment,
+            )
+            span.set_attribute("documents.total", total)
             return {"documents": docs, "total": total}, 200
         except Exception as e:
             logger.error(f"[api] Error fetching documents: {e}")
@@ -510,12 +640,40 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
 
     try:
         builder = PromptBuilder()
-        messages, system = builder.build_enrichment_messages(text[:3000])
         llm = get_llm()
+
+        # ── Step 1: Main LLM enrichment (all structured fields) ──────────────
+        messages, system = builder.build_enrichment_messages(text[:3000])
         raw = llm.complete_json(messages, system)
         payload = InsightsEngine._parse_json(raw)
         if not payload:
             raise ValueError("Failed to parse enrichment JSON from LLM")
+
+        # ── Step 2: IOC extraction (regex, synchronous) ───────────────────────
+        payload["iocs"] = _extract_iocs(text)
+
+        # ── Step 3: Geocode extracted location names via Nominatim ────────────
+        location_names = payload.pop("locations", []) or []
+        if isinstance(location_names, list):
+            geocoded = []
+            for loc in location_names[:12]:
+                if isinstance(loc, str) and loc.strip():
+                    result = _geocode_location(loc.strip())
+                    if result:
+                        geocoded.append(result)
+            payload["locations"] = geocoded
+
+        # ── Step 4: Translation (if document is not in Romanian) ─────────────
+        doc_lang = (payload.get("language") or "en").lower()
+        if doc_lang not in ("ro", "ron", "rum"):
+            try:
+                t_msgs, t_sys = builder.build_translation_messages(text[:3000])
+                t_raw = llm.complete_json(t_msgs, t_sys)
+                t_data = InsightsEngine._parse_json(t_raw)
+                if t_data and t_data.get("text"):
+                    payload["translation"] = t_data["text"]  # store plain string
+            except Exception as te:
+                logger.warning(f"[enrich] Translation failed for doc_id={doc_id}: {te}")
 
         with get_db() as db:
             row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
@@ -536,6 +694,131 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
                     db.commit()
         except Exception as db_err:
             logger.error(f"[enrich] DB error-update failed: {db_err}")
+
+
+def document_enrich_stream_handler(app, operation, request, **kwargs):
+    """POST /v1/documents/enrich/stream — SSE stream of enrichment steps.
+
+    Body: { "datasource": str, "doc_id": str, "text": str, "force"?: bool }
+
+    SSE event format:
+      data: {"type": "cached",   "payload": {...}}          — already complete, no work done
+      data: {"type": "partial",  "payload": {...so far...}} — a step finished
+      data: {"type": "complete", "payload": {...full...}}   — all steps done, persisted to DB
+      data: {"type": "error",    "error": "..."}            — enrichment failed
+    """
+    body      = _json()
+    datasource = body.get("datasource")
+    doc_id     = body.get("doc_id")
+    text       = body.get("text", "")
+    force      = bool(body.get("force", False))
+
+    sse_headers = {
+        **_cors_headers(),
+        "Cache-Control":     "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+
+    if not datasource or not doc_id or not text:
+        def _err():
+            yield f'data: {json.dumps({"type": "error", "error": "datasource, doc_id, and text are required"})}\n\n'
+        return Response(stream_with_context(_err()), mimetype="text/event-stream", headers=sse_headers)
+
+    def generate():
+        from src.session.models import DocumentEnrichment, get_db
+        from src.rag.llm_client import get_llm
+        from src.rag.prompt_builder import PromptBuilder
+        from src.rag.insights_engine import InsightsEngine
+
+        # ── Check cache ──────────────────────────────────────────────────────
+        try:
+            with get_db() as db:
+                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                if row and row.status == "complete" and not force:
+                    yield f'data: {json.dumps({"type": "cached", "payload": row.payload or {}})}\n\n'
+                    return
+
+                # Reset / create row
+                if not row:
+                    row = DocumentEnrichment(doc_id=doc_id, datasource=datasource, status="processing")
+                    db.add(row)
+                else:
+                    row.status = "processing"
+                    row.started_at = datetime.now(timezone.utc)
+                    row.error = None
+                db.commit()
+        except Exception as e:
+            yield f'data: {json.dumps({"type": "error", "error": f"DB init failed: {e}"})}\n\n'
+            return
+
+        accumulated: dict = {}
+        builder = PromptBuilder()
+        llm = get_llm()
+
+        try:
+            # ── Step 1: Main LLM (summary + all structured fields) ───────────
+            messages, system = builder.build_enrichment_messages(text[:3000])
+            raw = llm.complete_json(messages, system)
+            step1 = InsightsEngine._parse_json(raw)
+            if not step1:
+                raise ValueError("LLM returned unparseable JSON for main enrichment")
+            accumulated.update(step1)
+            yield f'data: {json.dumps({"type": "partial", "payload": dict(accumulated)})}\n\n'
+
+            # ── Step 2: IOC extraction (regex, instant) ───────────────────────
+            accumulated["iocs"] = _extract_iocs(text)
+            yield f'data: {json.dumps({"type": "partial", "payload": dict(accumulated)})}\n\n'
+
+            # ── Step 3: Geocode location names ───────────────────────────────
+            location_names = accumulated.pop("locations", []) or []
+            if isinstance(location_names, list):
+                geocoded = []
+                for loc in location_names[:12]:
+                    if isinstance(loc, str) and loc.strip():
+                        result = _geocode_location(loc.strip())
+                        if result:
+                            geocoded.append(result)
+                accumulated["locations"] = geocoded
+            yield f'data: {json.dumps({"type": "partial", "payload": dict(accumulated)})}\n\n'
+
+            # ── Step 4: Translation ───────────────────────────────────────────
+            doc_lang = (accumulated.get("language") or "en").lower()
+            if doc_lang not in ("ro", "ron", "rum"):
+                try:
+                    t_msgs, t_sys = builder.build_translation_messages(text[:3000])
+                    t_raw = llm.complete_json(t_msgs, t_sys)
+                    t_data = InsightsEngine._parse_json(t_raw)
+                    if t_data and t_data.get("text"):
+                        accumulated["translation"] = t_data["text"]
+                except Exception as te:
+                    logger.warning(f"[enrich_stream] Translation failed: {te}")
+            yield f'data: {json.dumps({"type": "partial", "payload": dict(accumulated)})}\n\n'
+
+            # ── Persist ───────────────────────────────────────────────────────
+            with get_db() as db:
+                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                if row:
+                    row.status = "complete"
+                    row.payload = dict(accumulated)
+                    row.error = None
+                    db.commit()
+
+            yield f'data: {json.dumps({"type": "complete", "payload": dict(accumulated)})}\n\n'
+
+        except Exception as e:
+            logger.error(f"[enrich_stream] Failed doc_id={doc_id}: {e}", exc_info=True)
+            try:
+                with get_db() as db:
+                    row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                    if row:
+                        row.status = "error"
+                        row.error = str(e)
+                        db.commit()
+            except Exception:
+                pass
+            yield f'data: {json.dumps({"type": "error", "error": str(e)})}\n\n'
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream", headers=sse_headers)
 
 
 def document_enrichment_handler(app, operation, request, **kwargs):
@@ -606,9 +889,13 @@ def document_enrich_field_handler(app, operation, request, **kwargs):
     text = body.get("text", "")
     field = body.get("field", "")
 
-    VALID_FIELDS = {"sentiment", "classification", "entities", "summary"}
+    # iocs uses regex only; locations/timeline/graph/translation use LLM (or LLM+geo)
+    VALID_FIELDS = {
+        "sentiment", "classification", "entities", "summary",
+        "graph", "timeline", "locations", "iocs", "translation",
+    }
     if not datasource or not doc_id or not text or field not in VALID_FIELDS:
-        return {"error": f"datasource, doc_id, text, and field ({'/'.join(VALID_FIELDS)}) are required"}, 400
+        return {"error": f"datasource, doc_id, text, and field ({'/'.join(sorted(VALID_FIELDS))}) are required"}, 400
 
     with tracer.start_as_current_span("api.documents.enrich.field") as span:
         span.set_attribute("enrich.doc_id", doc_id)
@@ -623,13 +910,42 @@ def document_enrich_field_handler(app, operation, request, **kwargs):
             from src.rag.insights_engine import InsightsEngine
 
             try:
-                builder = PromptBuilder()
-                messages, system = builder.build_field_enrichment_messages(text[:3000], field)
-                llm = get_llm()
-                raw = llm.complete_json(messages, system)
-                partial = InsightsEngine._parse_json(raw)
-                if not partial:
-                    raise ValueError(f"Failed to parse {field} JSON from LLM")
+                partial: dict = {}
+
+                if field == "iocs":
+                    # Pure regex — no LLM call needed
+                    partial = {"iocs": _extract_iocs(text)}
+
+                elif field == "locations":
+                    builder = PromptBuilder()
+                    messages, system = builder.build_field_enrichment_messages(text[:3000], "locations")
+                    llm = get_llm()
+                    raw = llm.complete_json(messages, system)
+                    parsed = InsightsEngine._parse_json(raw) or {}
+                    location_names = parsed.get("locations", [])
+                    geocoded = []
+                    for name in location_names[:20]:
+                        geo = _geocode_location(name)
+                        geocoded.append(geo if geo else {"name": name, "lat": None, "lon": None, "display_name": name})
+                    partial = {"locations": geocoded}
+
+                elif field == "translation":
+                    builder = PromptBuilder()
+                    messages, system = builder.build_translation_messages(text[:4000])
+                    llm = get_llm()
+                    raw = llm.complete_json(messages, system)
+                    parsed = InsightsEngine._parse_json(raw) or {}
+                    partial = {"translation": parsed.get("text", "")}
+
+                else:
+                    # LLM-based fields: sentiment, classification, entities, summary, graph, timeline
+                    builder = PromptBuilder()
+                    messages, system = builder.build_field_enrichment_messages(text[:3000], field)
+                    llm = get_llm()
+                    raw = llm.complete_json(messages, system)
+                    partial = InsightsEngine._parse_json(raw) or {}
+                    if not partial:
+                        raise ValueError(f"Failed to parse {field} JSON from LLM")
 
                 with get_db() as db:
                     row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
@@ -1128,3 +1444,53 @@ def documents_status_handler(app, operation, request, **kwargs):
             db.add(row)
 
     return {"doc_id": doc_id, "datasource": datasource, "status": status}, 200
+
+
+def documents_labels_handler(app, operation, request, **kwargs):
+    """GET|POST /v1/documents/labels — fetch or set analyst labels for documents.
+
+    GET  ?datasource=x          → { "labels": { doc_id: ["label1", "label2"] } }
+    POST { datasource, doc_id, labels: ["label1", "label2"] }
+         Pass labels=[] to clear all labels for the document.
+    """
+    from src.session.models import DocumentLabel, get_db
+
+    method = flask_request.method
+
+    if method == "GET":
+        datasource = flask_request.args.get("datasource")
+        if not datasource:
+            return {"error": "datasource is required"}, 400
+        with get_db() as db:
+            rows = db.query(DocumentLabel).filter_by(datasource=datasource).all()
+            labels_map = {r.doc_id: r.labels or [] for r in rows}
+        return {"labels": labels_map}, 200
+
+    # POST — upsert
+    body       = _json()
+    datasource = body.get("datasource")
+    doc_id     = body.get("doc_id")
+    labels     = body.get("labels")
+
+    if not datasource or not doc_id:
+        return {"error": "datasource and doc_id are required"}, 400
+    if not isinstance(labels, list):
+        return {"error": "labels must be an array"}, 400
+    # Sanitise: unique, non-empty strings, max 50 chars each
+    labels = list({str(l).strip()[:50] for l in labels if str(l).strip()})
+
+    with get_db() as db:
+        row = db.query(DocumentLabel).filter_by(doc_id=doc_id, datasource=datasource).first()
+        if labels:
+            if row:
+                row.labels     = labels
+                row.updated_at = datetime.now(timezone.utc)
+            else:
+                row = DocumentLabel(doc_id=doc_id, datasource=datasource, labels=labels)
+                db.add(row)
+        else:
+            # Empty list → delete the row
+            if row:
+                db.delete(row)
+
+    return {"doc_id": doc_id, "datasource": datasource, "labels": labels}, 200

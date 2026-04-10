@@ -27,7 +27,7 @@ FORMAT RULES:
 1. Output ONLY valid JSON.
 2. The JSON must have EXACTLY this structure:
 {
-  "hot_topics": [{"topic": "string", "count_estimate": int, "summary": "string", "sentiment": "positive|negative|neutral|mixed|hostile"}],
+  "hot_topics": [{"topic": "string", "count_estimate": int, "summary": "string", "sentiment": "positive|negative|neutral"}],
   "narratives": [{"title": "string", "description": "string", "evidence_docs": ["doc_title_or_keyword"]}],
   "trends": [{"label": "string", "direction": "rising|falling|stable", "change_pct": float, "time_period": "string"}]
 }
@@ -77,20 +77,53 @@ ENRICH_SUMMARY_PROMPT = """Write a concise 1-2 sentence intelligence summary of 
 Output ONLY valid JSON: {"summary": "string"}"""
 
 
-INSIGHTS_ENRICH_PROMPT = """You are an expert intelligence analyst. 
-Analyze the following document and extract key enrichments.
+INSIGHTS_ENRICH_PROMPT = """You are an expert intelligence analyst.
+Analyze the following document and extract structured intelligence enrichments.
 
 FORMAT RULES:
-1. Output ONLY valid JSON.
+1. Output ONLY valid JSON, no markdown fences.
 2. The JSON must have EXACTLY this structure:
 {
-  "summary": "string (1-2 sentences)",
-  "sentiment": "positive|negative|neutral|mixed",
-  "classification": "string (e.g., Cyber Threat, Geopolitics, Financial Crime)",
-  "entities": [{"name": "string", "type": "person|org|location|tool"}]
+  "summary": "string (2-3 sentences)",
+  "sentiment": "positive|negative|neutral|mixed|hostile|supportive",
+  "classification": "string (e.g., Cyber Threat, Geopolitics, Disinformation, Financial Crime)",
+  "entities": [{"name": "string", "type": "person|org|location|tool|event|vulnerability"}],
+  "graph": {
+    "nodes": [{"id": "string", "label": "string", "type": "person|org|location|tool|event", "community": 0}],
+    "edges": [{"source": "string", "target": "string", "relationship": "string", "weight": 0.8}]
+  },
+  "timeline": [{"date": "string (as written in document)", "description": "string", "normalized": "ISO 8601 or null"}],
+  "locations": ["place name 1", "place name 2"],
+  "language": "ISO 639-1 code of the document primary language"
 }
-3. Do NOT include any other keys.
+3. "graph": 3-15 nodes (key entities), 3-20 edges (relationships). source/target must match node ids.
+4. "timeline": ALL date/time references found in the document.
+5. "locations": ONLY geographic place names (cities, countries, regions) — just names, no coordinates.
+6. "language": primary language code (e.g. "en", "ro", "fr", "ar", "ru").
+7. Do NOT include any other top-level keys.
 """
+
+ENRICH_GRAPH_PROMPT = """Extract a knowledge graph of entities and their relationships from the document.
+Output ONLY valid JSON:
+{
+  "graph": {
+    "nodes": [{"id": "EntityName", "label": "EntityName", "type": "person|org|location|tool|event", "community": 0}],
+    "edges": [{"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}]
+  }
+}
+Aim for 5-15 nodes and 5-20 edges. source/target must match node ids exactly."""
+
+ENRICH_TIMELINE_PROMPT = """Extract all temporal references from the document (dates, time periods, events with timestamps).
+Output ONLY valid JSON:
+{"timeline": [{"date": "string (as in document)", "description": "string (what happened)", "normalized": "ISO 8601 or null"}]}"""
+
+ENRICH_LOCATIONS_PROMPT = """Extract all geographic locations mentioned in the document.
+Output ONLY valid JSON: {"locations": ["location name 1", "location name 2"]}
+List only distinct place names (cities, countries, regions). Do not include coordinates."""
+
+ENRICH_TRANSLATION_PROMPT = """Translate the following text to Romanian language.
+Output ONLY valid JSON: {"text": "Romanian translation here"}
+If the text is already in Romanian, return it unchanged. Preserve structure and meaning."""
 
 class PromptBuilder:
     """Assembles LLM-ready messages from retrieved chunks + conversation history."""
@@ -108,17 +141,15 @@ class PromptBuilder:
         return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
 
     def build_field_enrichment_messages(self, document_text: str, field: str) -> tuple[list[dict], str]:
-        """Build messages for a single enrichment field (sentiment / classification / entities / summary).
-
-        Args:
-            document_text: The document content to analyze.
-            field: One of 'sentiment', 'classification', 'entities', 'summary'.
-        """
+        """Build messages for a single enrichment field reload."""
         field_prompt_map = {
             "sentiment":      ENRICH_SENTIMENT_PROMPT,
             "classification": ENRICH_CLASSIFICATION_PROMPT,
             "entities":       ENRICH_ENTITIES_PROMPT,
             "summary":        ENRICH_SUMMARY_PROMPT,
+            "graph":          ENRICH_GRAPH_PROMPT,
+            "timeline":       ENRICH_TIMELINE_PROMPT,
+            "locations":      ENRICH_LOCATIONS_PROMPT,
         }
         prompt = field_prompt_map.get(field, INSIGHTS_ENRICH_PROMPT)
         messages = [{
@@ -126,6 +157,14 @@ class PromptBuilder:
             "content": f"Document:\n{document_text}\n\n---\n{prompt}",
         }]
         return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
+
+    def build_translation_messages(self, document_text: str) -> tuple[list[dict], str]:
+        """Build messages to translate a document to Romanian."""
+        messages = [{
+            "role": "user",
+            "content": f"Text to translate to Romanian:\n{document_text}\n\n---\n{ENRICH_TRANSLATION_PROMPT}",
+        }]
+        return messages, "You are a professional translator. Output ONLY valid JSON."
 
     # ── Chat prompt ─────────────────────────────────────────────────────────────
 

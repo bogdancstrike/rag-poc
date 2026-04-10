@@ -193,6 +193,7 @@ function TaskDetailPage() {
 function IndexPage() {
   const { idx, docId } = useParams<{ idx: string; docId?: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const [activeTab, setActiveTab] = useState<'data' | 'insights' | 'chat'>('data')
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
   const { pendingQuery: storePending, setPendingQuery: setStorePending } = useSessionStore()
@@ -208,6 +209,12 @@ function IndexPage() {
       setActiveTab('chat')
     }
   }, [storePending])
+
+  // Support navigate(..., { state: { tab: 'insights' } }) from Task detail
+  useEffect(() => {
+    const tabFromState = (location.state as any)?.tab
+    if (tabFromState) setActiveTab(tabFromState)
+  }, [location.state])
 
   // When a docId appears in the URL (e.g. "Go to doc" from chat), switch to data tab
   useEffect(() => {
