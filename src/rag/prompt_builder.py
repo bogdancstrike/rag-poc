@@ -47,30 +47,97 @@ FORMAT RULES:
 
 INSIGHTS_GRAPH_PROMPT = """Detect communities of related entities across ALL provided documents and build a knowledge graph centred on those communities.
 
-OBJECTIVE: Discover clusters (communities) of entities that share significant relationships. Prioritise entities with multiple connections — isolated nodes with no edges add no value and should be omitted.
+OBJECTIVE: First extract Named Entities (NER) from the documents, then discover clusters (communities) of those entities that share significant relationships. Prioritise entities with multiple connections — isolated nodes with no edges add no value and should be omitted.
+
+==========================================================
+PHASE 1 — NAMED ENTITY RECOGNITION (MANDATORY FIRST STEP)
+==========================================================
+Before constructing ANY graph, perform Named Entity Recognition over the full document set. Extract ONLY entities that fall into one of the following categories. Any token/phrase that does not match one of these categories MUST be ignored and MUST NOT appear in the graph.
+
+Allowed entity categories (these are the ONLY permitted node types):
+
+1. PERSON — Named individuals (politicians, executives, suspects, journalists, researchers, etc.).
+   Example: "Vladimir Putin", "Elon Musk".
+
+2. ORG (ORGANIZATION) — Companies, government agencies, NGOs, political parties, military units, intelligence services, threat actor groups, terrorist organisations.
+   Example: "Gazprom", "SVR", "LockBit", "European Commission".
+
+3. GPE (Geo-Political Entity) — Politically defined places: countries, cities, states, regions with governance.
+   Example: "Ukraine", "Bucharest", "California".
+
+4. LOC (LOCATION) — Non-political geography: mountains, rivers, seas, continents, named natural areas.
+   Example: "Black Sea", "Carpathians".
+
+5. DATE — Temporal expressions: absolute dates, relative dates, quarters, years, named periods.
+   Example: "March 15 2026", "Q3 2026", "yesterday".
+
+6. MONEY — Financial amounts and currencies.
+   Example: "€2.5 million", "$10,000".
+
+7. EVENT — Named real-world events: elections, summits, attacks, protests, conferences, operations, incidents.
+   Example: "KubeCon 2026", "January 6th", "Operation Aurora".
+
+8. PRODUCT — Commercial products, software, weapons systems, vehicles, malware families, platforms.
+   Example: "F-35", "ChatGPT", "iPhone", "Cobalt Strike".
+
+9. NORP — Nationalities, Religious or Political groups (collective identities, NOT individuals or formal orgs).
+   Example: "Romanians", "Catholics", "Democrats".
+
+10. LAW — Named laws, treaties, regulations, court cases, directives.
+    Example: "GDPR", "NIS2", "Roe v. Wade".
+
+11. FAC (FACILITY) — Buildings, airports, highways, bridges, military bases, ports, named physical infrastructure.
+    Example: "Pentagon", "Otopeni Airport", "Nord Stream pipeline".
+
+NER RULES:
+- Extract entities EXACTLY as they appear in the source text. Do NOT normalise to canonical real-world forms.
+- You MAY merge obvious aliases (e.g., "EU" and "European Union") only if BOTH forms appear in the documents; otherwise keep the surface form used in the text.
+- Do NOT extract generic nouns ("the company", "the president") unless the document attaches a specific name.
+- Do NOT invent, infer, or hallucinate entities. If it is not literally in the text, it does not exist.
+- Discard any candidate entity that does not cleanly fit one of the 11 categories above.
+
+==========================================================
+PHASE 2 — GRAPH CONSTRUCTION FROM EXTRACTED NER
+==========================================================
+Using ONLY the entities produced in Phase 1, build a community-oriented knowledge graph.
 
 STRICT GROUNDING RULES (MOST IMPORTANT):
-- Use ONLY entities, relationships, and facts that are explicitly present in the provided documents. Do NOT invent, infer, guess, or fabricate ANY entity, edge, relationship, or attribute.
-- Do NOT rely on prior/background knowledge about real-world actors, groups, tools, or events. If it is not in the source text, it does not exist for this task.
-- Every node MUST correspond to an entity literally mentioned in the documents. Every edge MUST correspond to a relationship that is directly stated or unambiguously supported by the text.
-- If the documents do not contain enough connected entities to reach the suggested node/edge counts, return FEWER nodes and edges rather than padding with invented ones. Quality and faithfulness to the source override target counts.
-- Do NOT normalise entity names to "canonical" real-world forms if the document uses a different form — preserve the name as it appears in the source (you may merge obvious aliases only if both forms appear in the documents).
+- Every node MUST be one of the entities extracted during Phase 1. No exceptions.
+- Every edge MUST correspond to a relationship that is directly stated or unambiguously supported by the document text. Do NOT rely on prior/background real-world knowledge.
 - Relationship labels must describe what the text actually says, not assumed or typical relationships between such entities in the real world.
 - If you are uncertain whether a relationship is supported by the text, OMIT it.
+- If the documents do not contain enough connected entities to reach the suggested node/edge counts, return FEWER nodes and edges rather than padding with invented ones. Faithfulness to the source overrides target counts.
 
 FORMAT RULES:
-1. Output ONLY valid JSON, no markdown, no comments.
-2. Use the entity name itself as the node "id" (e.g., "LockBit", "SVR", "Ukraine"), exactly as it appears in the source documents.
-3. Aim for 20-50 nodes and 40-100 edges ONLY IF the source material supports it. Every node MUST have at least 2 edges. If the documents support fewer, return fewer.
-4. Assign each node a "community" integer (0-based). Nodes in the same community share a dominant theme, actor group, or campaign as evidenced by the documents. Aim for 4-10 distinct communities, but only as many as the data genuinely supports.
-5. The JSON must have EXACTLY this structure:
+1. Output ONLY valid JSON, no markdown, no comments, no preamble.
+2. Use the entity name itself as the node "id", exactly as it appears in the source documents (e.g., "LockBit", "SVR", "Ukraine").
+3. The node "type" field MUST be one of the lowercase tags from this fixed set, mapped from the Phase 1 categories:
+   - "person"   (PERSON)
+   - "org"      (ORG)
+   - "gpe"      (GPE)
+   - "loc"      (LOC)
+   - "date"     (DATE)
+   - "money"    (MONEY)
+   - "event"    (EVENT)
+   - "product"  (PRODUCT)
+   - "norp"     (NORP)
+   - "law"      (LAW)
+   - "fac"      (FAC)
+   No other type values are permitted.
+4. Aim for 20–50 nodes and 40–100 edges ONLY IF the source material supports it. Every node MUST have at least 2 edges; otherwise drop it.
+5. Assign each node a "community" integer (0-based). Nodes in the same community share a dominant theme, actor group, campaign, incident, or storyline as evidenced by the documents. Aim for 4–10 distinct communities, but only as many as the data genuinely supports.
+6. The JSON must have EXACTLY this structure:
 {
-  "nodes": [{"id": "EntityName", "label": "EntityName", "type": "person|org|location|tool|event", "community": 0}],
-  "edges": [{"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}]
+  "nodes": [
+    {"id": "EntityName", "label": "EntityName", "type": "person|org|gpe|loc|date|money|event|product|norp|law|fac", "community": 0}
+  ],
+  "edges": [
+    {"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}
+  ]
 }
-6. "source" and "target" in edges MUST match node "id" values exactly.
-7. "weight" reflects relationship strength (0.1–1.0) based on how explicitly and frequently the relationship is described in the documents: use higher weights for edges within the same community and for relationships stated multiple times or in strong terms.
-8. Do NOT include any other top-level keys.
+7. "source" and "target" in edges MUST match node "id" values exactly.
+8. "weight" reflects relationship strength (0.1–1.0) based on how explicitly and frequently the relationship is described in the documents: use higher weights for edges within the same community and for relationships stated multiple times or in strong terms.
+9. Do NOT include any other top-level keys. Do NOT emit the Phase 1 NER list separately — it is an internal step; only the final graph JSON is returned.
 """
 
 # ── Per-field enrichment prompts ───────────────────────────────────────────────
