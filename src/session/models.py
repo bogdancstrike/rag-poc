@@ -112,6 +112,28 @@ class InsightsCache(Base):
             "sample_hash":  self.sample_hash,
         }
 
+class DocumentEnrichment(Base):
+    """Cache for AI enrichment operations (sentiment, ner, classification) on a single document."""
+    __tablename__ = "rag_document_enrichment"
+
+    doc_id       = Column(String(255), primary_key=True)
+    datasource   = Column(String(100), primary_key=True)
+    
+    status       = Column(String(20),  nullable=False, default="pending") # pending, processing, complete, error
+    payload      = Column(JSON,        nullable=True)
+    error        = Column(Text,        nullable=True)
+    
+    generated_at = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "doc_id":       self.doc_id,
+            "datasource":   self.datasource,
+            "status":       self.status,
+            "payload":      self.payload,
+            "error":        self.error,
+            "generated_at": self.generated_at.isoformat() if self.generated_at else None,
+        }
 
 # ── Engine / session factory ───────────────────────────────────────────────────
 

@@ -11,6 +11,7 @@ import { InsightsPanel } from '@/components/insights/InsightsPanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { DataTable } from '@/components/explore/DataTable'
 import { useIndices } from '@/hooks/useExplore'
+import { Document } from '@/api/explore'
 
 const { Header, Content, Sider } = Layout
 const { Text } = Typography
@@ -33,7 +34,22 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
 
   const { data: indices, isLoading: isLoadingIndices, error: indicesError } = useIndices()
   const [datasource, setDatasource] = useState<string>('')
-  const [aiMode, setAiMode] = useState<boolean>(false)
+  const [aiModes, setAiModes] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem('qsint_ai_modes')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const aiMode = aiModes[datasource] || false
+  const setAiMode = (checked: boolean) => {
+    setAiModes(prev => {
+      const next = { ...prev, [datasource]: checked }
+      try { localStorage.setItem('qsint_ai_modes', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
 
   const [activeTab, setActiveTab]       = useState<'insights' | 'chat'>('insights')
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
@@ -49,6 +65,15 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
   const handleAskAbout = (question: string) => {
     setPendingQuery(question)
     setStorePendingQuery(question)
+    setActiveTab('chat')
+    setAiMode(true)
+  }
+
+  const handleSendToRag = (docs: any[]) => {
+    const context = docs.map(d => `Title: ${d.title}\nContent: ${d.text}`).join('\n\n')
+    const query = `Please analyze the following ${docs.length} selected documents:\n\n${context}`
+    setPendingQuery(query)
+    setStorePendingQuery(query)
     setActiveTab('chat')
     setAiMode(true)
   }
@@ -171,7 +196,7 @@ function RagModuleInner({ height = '100vh' }: RagModuleProps) {
             />
           ) : (
             <div style={{ height: '100%', padding: '16px' }}>
-               <DataTable datasource={datasource} />
+               <DataTable datasource={datasource} onSendToRag={handleSendToRag} />
             </div>
           )}
         </Content>

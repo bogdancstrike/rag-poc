@@ -151,6 +151,28 @@
         "module_name": "api.endpoints",
         "method_name": "documents_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_documents_enrich",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/documents/enrich",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "document_enrichment_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_insights_task_refresh",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/insights/task/refresh",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "task_refresh_handler"
+      }
     }
   ]
 }

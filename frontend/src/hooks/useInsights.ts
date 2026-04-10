@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchInsights, refreshInsights, deleteInsights } from '@/api/insights'
+import { fetchInsights, refreshInsights, deleteInsights, refreshTask } from '@/api/insights'
 
 export function useInsights(datasource = 'default') {
   return useQuery({
@@ -32,6 +32,14 @@ export function useDeleteInsights(datasource = 'default') {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => deleteInsights(datasource),
+    onSuccess:  () => qc.invalidateQueries({ queryKey: ['insights', datasource] }),
+  })
+}
+
+export function useRefreshTask(datasource: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (task: string) => refreshTask(datasource, task),
     onSuccess:  () => qc.invalidateQueries({ queryKey: ['insights', datasource] }),
   })
 }

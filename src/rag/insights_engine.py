@@ -82,7 +82,7 @@ class InsightsEngine:
             if needs_refresh:
                 logger.info(f"[insights] Triggering fresh refresh for {datasource} (forced={force_refresh})")
                 retriever = get_retriever()
-                sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS)
+                sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
                 if not sample:
                     return self._empty_response(datasource, "No documents")
 
@@ -153,15 +153,20 @@ class InsightsEngine:
             self._set_task_status(datasource, "stats", "processing", sample_hash)
             try:
                 retriever = get_retriever()
-                stats = retriever.get_status()
-                doc_count = stats.get("doc_count", 0)
+                status = retriever.get_status(datasource)
+                doc_count = status.get("doc_count", 0)
+                
+                aggs = retriever.get_aggregations(datasource)
+                
                 payload = {
                     "doc_count": doc_count,
-                    "distribution": [
-                        {"label": "Social Media", "value": 45},
-                        {"label": "Dark Web", "value": 30},
-                        {"label": "Technical Logs", "value": 25}
-                    ],
+                    "platforms": aggs.get("platforms", []),
+                    "regions": aggs.get("regions", []),
+                    "topics": aggs.get("topics", []),
+                    "sentiments": aggs.get("sentiments", []),
+                    "entities": aggs.get("entities", []),
+                    # Keep distribution/timeline dummy for now or replace with actual
+                    "distribution": aggs.get("platforms", [])[:3],
                     "timeline": [
                         {"date": "2026-04-01", "count": int(doc_count * 0.1)},
                         {"date": "2026-04-05", "count": int(doc_count * 0.4)},
@@ -170,7 +175,7 @@ class InsightsEngine:
                 }
                 self._set_task_status(datasource, "stats", "complete", sample_hash, payload=payload)
             except Exception as e:
-                logger.error(f"[insights] Stats task failed: {e}")
+                logger.error(f"[insights] Stats task failed: {e}", exc_info=True)
                 self._set_task_status(datasource, "stats", "error", sample_hash, error=str(e))
 
     # ── DB Helpers ──────────────────────────────────────────────────────────────
@@ -226,7 +231,6 @@ class InsightsEngine:
             return dt
         except Exception:
             return None
-
     @staticmethod
     def _parse_json(raw: str) -> Optional[dict]:
         """Strip markdown fences and handle common malformed JSON issues."""
@@ -234,13 +238,28 @@ class InsightsEngine:
         cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
         cleaned = re.sub(r",\s*}", "}", cleaned)
         cleaned = re.sub(r"//.*", "", cleaned)
+
+        def _extract_known_keys(data: dict) -> dict:
+            # If the LLM wrapped the response in a rogue top-level key, unwrap it
+            if isinstance(data, dict):
+                # Check if it already has the expected keys
+                if any(k in data for k in ("hot_topics", "entities", "nodes", "edges", "trends", "narratives")):
+                    return data
+                # Otherwise, search values for expected keys
+                for v in data.values():
+                    if isinstance(v, dict) and any(k in v for k in ("hot_topics", "entities", "nodes", "edges", "trends", "narratives")):
+                        return v
+            return data
+
         try:
-            return json.loads(cleaned)
+            return _extract_known_keys(json.loads(cleaned))
         except json.JSONDecodeError:
+            # Last resort: extract first { ... }
             start = cleaned.find("{")
             end = cleaned.rfind("}")
             if start != -1 and end != -1:
-                try: return json.loads(cleaned[start:end+1])
+                try: 
+                    return _extract_known_keys(json.loads(cleaned[start:end+1]))
                 except: pass
         return None
 

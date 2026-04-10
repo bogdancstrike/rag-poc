@@ -59,20 +59,24 @@ export interface Anomaly {
 }
 
 export interface InsightsMeta {
-  cached: boolean
-  generated_at: string
+  cached?: boolean
+  generated_at?: string
   age_seconds?: number
   doc_count?: number
   datasource: string
   reason?: string
+  is_processing?: boolean
+  refresh_triggered?: boolean
+  sample_hash?: string
 }
 
 export interface Insights {
-  hot_topics: HotTopic[]
-  narratives: Narrative[]
-  trends: Trend[]
-  entities: Entity[]
-  anomalies: Anomaly[]
+  tasks?: Record<string, any>
+  hot_topics?: HotTopic[]
+  narratives?: Narrative[]
+  trends?: Trend[]
+  entities?: Entity[]
+  anomalies?: Anomaly[]
   _meta: InsightsMeta
 }
 

@@ -8,7 +8,6 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <RagModule
       baseUrl={(import.meta as any).env?.VITE_API_BASE_URL || ''}
-      datasource="qsint_docs"
       height="100vh"
     />
   </StrictMode>,

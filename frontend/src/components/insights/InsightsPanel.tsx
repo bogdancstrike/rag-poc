@@ -1,6 +1,6 @@
 import {
   Row, Col, Card, Spin, Alert, Button, Tag, Typography, Space, Tooltip,
-  Divider, theme, Empty, Progress
+  Divider, theme, Empty, Progress, Table
 } from 'antd'
 import {
   ReloadOutlined, InfoCircleOutlined, FireOutlined, RiseOutlined,
@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
-import { useInsights, useRefreshInsights, useDeleteInsights } from '@/hooks/useInsights'
+import { useInsights, useRefreshInsights, useDeleteInsights, useRefreshTask } from '@/hooks/useInsights'
 import { TopicBubbleChart } from './TopicBubbleChart'
 import { TrendAreaChart } from './TrendAreaChart'
 import { EntityBarChart } from './EntityBarChart'
@@ -39,6 +39,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
   const { data: insights, isLoading, error } = useInsights(datasource)
   const refreshMut = useRefreshInsights(datasource)
   const deleteMut = useDeleteInsights(datasource)
+  const refreshTaskMut = useRefreshTask(datasource)
 
   if (isLoading) {
     return (
@@ -71,20 +72,33 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
   const isProcessing = meta?.is_processing || Object.values(tasks).some((t: any) => t.status === 'processing' || t.status === 'pending')
   const generatedAt = summaryTask.generated_at ? dayjs(summaryTask.generated_at).fromNow() : '—'
 
-  const renderTaskHeader = (title: string, task: any, icon: any) => (
+  const renderTaskHeader = (title: string, task: any, icon: any, taskKey: string, type: 'ai' | 'static' = 'ai') => (
     <Row justify="space-between" align="middle" style={{ width: '100%' }}>
       <Space>
         {icon}
         <Text strong>{title}</Text>
+        <Tag color={type === 'ai' ? 'purple' : 'cyan'} style={{ fontSize: 10, lineHeight: '14px', margin: 0 }}>
+          {type === 'ai' ? 'AI-GENERATED' : 'STATIC ANALYSIS'}
+        </Tag>
       </Space>
       <Space>
         {(task.status === 'processing' || task.status === 'pending') && (
           <SyncOutlined spin style={{ color: token.colorPrimary }} />
         )}
         {task.status === 'error' && (
-          <Tooltip title={task.error}>
-            <WarningOutlined style={{ color: token.colorError }} />
-          </Tooltip>
+          <Space>
+            <Tooltip title={task.error}>
+              <WarningOutlined style={{ color: token.colorError }} />
+            </Tooltip>
+            <Button 
+              size="small" 
+              type="text" 
+              onClick={() => refreshTaskMut.mutate(taskKey)}
+              loading={refreshTaskMut.isPending && refreshTaskMut.variables === taskKey}
+            >
+              Restart
+            </Button>
+          </Space>
         )}
       </Space>
     </Row>
@@ -96,6 +110,11 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
       <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>Analyzing documents...</Text>
     </div>
   )
+
+  const staticCols = [
+    { title: 'Label', dataIndex: 'label', key: 'label' },
+    { title: 'Count', dataIndex: 'value', key: 'value', width: 80, align: 'right' as const },
+  ]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -144,36 +163,44 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
       {/* ── Stats ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader("Corpus Statistics", statsTask, <BarChartOutlined style={{ color: token.colorInfo }} />)}
+        title={renderTaskHeader("Corpus Statistics", statsTask, <BarChartOutlined style={{ color: token.colorInfo }} />, 'stats', 'static')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-        styles={{ body: { padding: '12px 16px' } }}
+        styles={{ body: { padding: '16px' } }}
       >
         {statsTask.payload ? (
-          <Row gutter={16}>
-            <Col span={8}>
-              <div style={{ textAlign: 'center' }}>
-                <Text type="secondary" style={{ fontSize: 11 }}>TOTAL DOCS</Text>
-                <Title level={4} style={{ margin: 0 }}>{statsTask.payload.doc_count}</Title>
-              </div>
-            </Col>
-            <Col span={16}>
-              <div style={{ display: 'flex', gap: 8, overflowX: 'auto' }}>
-                {statsTask.payload.distribution?.map((d: any, i: number) => (
-                  <div key={i} style={{ minWidth: 80 }}>
-                    <Text style={{ fontSize: 10 }}>{d.label}</Text>
-                    <Progress percent={d.value} size="small" strokeColor={token.colorPrimary} />
-                  </div>
-                ))}
-              </div>
-            </Col>
-          </Row>
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <Row gutter={16} align="middle">
+              <Col span={6}>
+                <div style={{ textAlign: 'center', background: '#fafafa', padding: 16, borderRadius: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>TOTAL DOCS</Text>
+                  <Title level={3} style={{ margin: 0, color: token.colorPrimary }}>{statsTask.payload.doc_count}</Title>
+                </div>
+              </Col>
+              <Col span={18}>
+                <Row gutter={16}>
+                  <Col span={8}>
+                    <Text strong style={{ fontSize: 12 }}>Top Platforms</Text>
+                    <Table dataSource={statsTask.payload.platforms || []} columns={staticCols} size="small" pagination={false} rowKey="label" scroll={{ y: 150 }} />
+                  </Col>
+                  <Col span={8}>
+                    <Text strong style={{ fontSize: 12 }}>Top Regions</Text>
+                    <Table dataSource={statsTask.payload.regions || []} columns={staticCols} size="small" pagination={false} rowKey="label" scroll={{ y: 150 }} />
+                  </Col>
+                  <Col span={8}>
+                    <Text strong style={{ fontSize: 12 }}>Top Static Entities</Text>
+                    <Table dataSource={statsTask.payload.entities || []} columns={staticCols} size="small" pagination={false} rowKey="label" scroll={{ y: 150 }} />
+                  </Col>
+                </Row>
+              </Col>
+            </Row>
+          </Space>
         ) : renderLoadingState()}
       </Card>
 
       {/* ── Hot Topics ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader("Hot Topics", summaryTask, <FireOutlined style={{ color: token.colorWarning }} />)}
+        title={renderTaskHeader("Hot Topics", summaryTask, <FireOutlined style={{ color: token.colorWarning }} />, 'summary')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '8px 16px 16px' } }}
       >
@@ -203,7 +230,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
       {/* ── Trends ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader("Trends", summaryTask, <RiseOutlined style={{ color: token.colorSuccess }} />)}
+        title={renderTaskHeader("Trends", summaryTask, <RiseOutlined style={{ color: token.colorSuccess }} />, 'summary')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '8px 16px 16px' } }}
       >
@@ -215,7 +242,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
       {/* ── Entities ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader("Identified Entities", nerTask, <TeamOutlined style={{ color: token.colorPrimary }} />)}
+        title={renderTaskHeader("Identified Entities", nerTask, <TeamOutlined style={{ color: token.colorPrimary }} />, 'ner')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '8px 16px 16px' } }}
       >
@@ -227,7 +254,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
       {/* ── Graph ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader("Relationship Network", graphTask, <NodeIndexOutlined style={{ color: token.colorPurple }} />)}
+        title={renderTaskHeader("Relationship Network", graphTask, <NodeIndexOutlined style={{ color: '#722ed1' }} />, 'graph')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '16px' } }}
       >
@@ -238,9 +265,9 @@ export function InsightsPanel({ datasource = 'default', onAskAbout }: Props) {
             <div style={{ maxHeight: 150, overflowY: 'auto' }}>
               {graphTask.payload.edges?.map((e: any, i: number) => (
                 <div key={i} style={{ marginBottom: 4 }}>
-                  <Tag size="small">{e.source}</Tag> 
+                  <Tag>{e.source}</Tag> 
                   <Text type="secondary" style={{ fontSize: 10 }}> —[{e.relationship}]—&gt; </Text>
-                  <Tag size="small">{e.target}</Tag>
+                  <Tag>{e.target}</Tag>
                 </div>
               ))}
             </div>

@@ -89,6 +89,15 @@ class Retriever:
             return {"type": Config.DATASOURCE_TYPE, "error": str(e)}
         return {"type": "none"}
 
+    def get_aggregations(self, index_name: str = None) -> dict:
+        """Return static aggregations from the active datasource."""
+        try:
+            if self._es_client:
+                return self._es_client.get_aggregations(index_name=index_name)
+        except Exception as e:
+            logger.error(f"[retriever] get_aggregations error: {e}", exc_info=True)
+        return {}
+
 
 # Module-level singleton — created once and reused across requests
 _retriever: Retriever | None = None

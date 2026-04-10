@@ -412,3 +412,102 @@ def documents_handler(app, operation, request, **kwargs):
         except Exception as e:
             logger.error(f"[api] Error fetching documents: {e}")
             return {"error": str(e)}, 500
+
+def document_enrichment_handler(app, operation, request, **kwargs):
+    """POST /v1/documents/enrich — enrich a single document (caching in Postgres)."""
+    body = _json()
+    datasource = body.get("datasource")
+    doc_id = body.get("doc_id")
+    text = body.get("text", "")
+    
+    if not datasource or not doc_id or not text:
+        return {"error": "datasource, doc_id, and text are required"}, 400
+        
+    with tracer.start_as_current_span("api.documents.enrich") as span:
+        from src.session.models import DocumentEnrichment, get_db
+        from src.rag.llm_client import get_llm
+        from src.rag.prompt_builder import PromptBuilder
+        from src.rag.insights_engine import InsightsEngine
+        
+        # Check cache
+        with get_db() as db:
+            row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+            if row and row.status == "complete":
+                return row.to_dict(), 200
+            
+            if not row:
+                row = DocumentEnrichment(doc_id=doc_id, datasource=datasource, status="processing")
+                db.add(row)
+            else:
+                row.status = "processing"
+                row.error = None
+            db.commit()
+            
+        try:
+            builder = PromptBuilder()
+            messages, system = builder.build_enrichment_messages(text[:3000]) # Cap text to avoid context limits
+            llm = get_llm()
+            raw = llm.complete_json(messages, system)
+            
+            engine = InsightsEngine()
+            payload = engine._parse_json(raw)
+            if not payload:
+                raise ValueError("Failed to parse JSON from LLM")
+                
+            with get_db() as db:
+                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                row.status = "complete"
+                row.payload = payload
+                db.commit()
+                return row.to_dict(), 200
+                
+        except Exception as e:
+            with get_db() as db:
+                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
+                row.status = "error"
+                row.error = str(e)
+                db.commit()
+                return row.to_dict(), 500
+
+def task_refresh_handler(app, operation, request, **kwargs):
+    """POST /v1/insights/task/refresh — refresh a single failed task."""
+    body = _json()
+    datasource = body.get("datasource")
+    task = body.get("task")
+    
+    if not datasource or not task:
+        return {"error": "datasource and task are required"}, 400
+        
+    with tracer.start_as_current_span("api.insights.task.refresh") as span:
+        try:
+            from src.rag.insights_engine import get_insights_engine
+            engine = get_insights_engine()
+            # Force trigger just that task by manually clearing its state and submitting
+            # (We can borrow internal methods to do this)
+            current = engine._load_all_from_cache(datasource)
+            sample_hash = "manual_refresh"
+            if current and task in current:
+                sample_hash = current[task].get("sample_hash", "manual_refresh")
+                
+            from src.rag.retriever import get_retriever
+            from src.config import Config
+            import hashlib
+            retriever = get_retriever()
+            sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
+            if sample:
+                doc_ids = sorted([str(d.get("id")) for d in sample])
+                sample_hash = hashlib.sha256(",".join(doc_ids).encode()).hexdigest()
+                
+            engine._set_task_status(datasource, task, "pending", sample_hash, clear_data=True)
+            
+            from concurrent.futures import ThreadPoolExecutor
+            # Import the internal executor from insights_engine
+            from src.rag.insights_engine import _executor
+            if task == "stats":
+                _executor.submit(engine._run_stats_task, datasource, sample_hash)
+            else:
+                _executor.submit(engine._run_ai_task, datasource, task, sample, sample_hash)
+                
+            return {"status": "restarted", "task": task}, 200
+        except Exception as e:
+            return {"error": str(e)}, 500

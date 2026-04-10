@@ -14,3 +14,7 @@ export const refreshInsights = async (datasource = 'default'): Promise<Insights>
 export const deleteInsights = async (datasource = 'default'): Promise<void> => {
   await apiClient.delete('/v1/insights', { params: { datasource } })
 }
+
+export const refreshTask = async (datasource: string, task: string): Promise<void> => {
+  await apiClient.post('/v1/insights/task/refresh', { datasource, task })
+}

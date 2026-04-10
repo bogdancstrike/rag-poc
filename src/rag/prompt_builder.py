@@ -41,6 +41,7 @@ FORMAT RULES:
 {
   "entities": [{"name": "string", "type": "person|org|location|event|tool|vulnerability", "frequency": int, "sentiment": "string"}]
 }
+3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
 """
 
 INSIGHTS_GRAPH_PROMPT = """Detect relationships and connections between entities in the documents.
@@ -51,11 +52,35 @@ FORMAT RULES:
   "nodes": [{"id": "string", "label": "string", "type": "string"}],
   "edges": [{"source": "string", "target": "string", "relationship": "string", "weight": float}]
 }
+3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
 """
 
 
+INSIGHTS_ENRICH_PROMPT = """You are an expert intelligence analyst. 
+Analyze the following document and extract key enrichments.
+
+FORMAT RULES:
+1. Output ONLY valid JSON.
+2. The JSON must have EXACTLY this structure:
+{
+  "summary": "string (1-2 sentences)",
+  "sentiment": "positive|negative|neutral|mixed",
+  "classification": "string (e.g., Cyber Threat, Geopolitics, Financial Crime)",
+  "entities": [{"name": "string", "type": "person|org|location|tool"}]
+}
+3. Do NOT include any other keys.
+"""
+
 class PromptBuilder:
     """Assembles LLM-ready messages from retrieved chunks + conversation history."""
+
+    def build_enrichment_messages(self, document_text: str) -> tuple[list[dict], str]:
+        """Build the messages list for single document enrichment."""
+        messages = [{
+            "role": "user",
+            "content": f"Document:\n{document_text}\n\n---\nAnalyze the above document and output structured JSON.\n\nREQUIRED SCHEMA (You MUST output ONLY valid JSON matching this exact structure):\n{INSIGHTS_ENRICH_PROMPT}",
+        }]
+        return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
 
     # ── Chat prompt ─────────────────────────────────────────────────────────────
 

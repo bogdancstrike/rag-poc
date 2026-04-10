@@ -52,7 +52,7 @@ class ESClient:
             info    = self._client.indices.stats(index=idx)
             mapping = self._client.indices.get_mapping(index=idx)
             health  = self._client.cluster.health()
-            doc_count = info["_all"]["primaries"]["docs"]["count"]
+            doc_count = info["indices"][idx]["primaries"]["docs"]["count"]
             fields = list(
                 mapping.get(idx, {})
                 .get("mappings", {})
@@ -158,7 +158,35 @@ class ESClient:
             logger.error(f"[es] sample error: {e}")
             return []
 
-    # ── Raw Documents ───────────────────────────────────────────────────────────
+    # ── Raw Documents & Aggregations ────────────────────────────────────────────
+
+    def get_aggregations(self, index_name: str = None) -> dict:
+        """Perform static analysis using Elasticsearch aggregations."""
+        idx = index_name or self._default_index
+        try:
+            body = {
+                "size": 0,
+                "aggs": {
+                    "platforms": {"terms": {"field": "platform.keyword", "size": 10}},
+                    "regions": {"terms": {"field": "region.keyword", "size": 10}},
+                    "topics": {"terms": {"field": "topic.keyword", "size": 10}},
+                    "sentiments": {"terms": {"field": "sentiment.keyword", "size": 10}},
+                    "entities": {"terms": {"field": "entity.keyword", "size": 10}},
+                }
+            }
+            resp = self._client.search(index=idx, body=body)
+            aggs = resp.get("aggregations", {})
+            return {
+                "platforms": [{"label": b["key"], "value": b["doc_count"]} for b in aggs.get("platforms", {}).get("buckets", [])],
+                "regions": [{"label": b["key"], "value": b["doc_count"]} for b in aggs.get("regions", {}).get("buckets", [])],
+                "topics": [{"label": b["key"], "value": b["doc_count"]} for b in aggs.get("topics", {}).get("buckets", [])],
+                "sentiments": [{"label": b["key"], "value": b["doc_count"]} for b in aggs.get("sentiments", {}).get("buckets", [])],
+                "entities": [{"label": b["key"], "value": b["doc_count"]} for b in aggs.get("entities", {}).get("buckets", [])],
+            }
+        except Exception as e:
+            logger.error(f"[es] get_aggregations error: {e}")
+            return {}
+
     def get_documents(self, index_name: str = None, offset: int = 0, limit: int = 50, query: str = None) -> tuple[list[dict], int]:
         """Get raw documents for tabular exploration. Returns (docs, total_count)."""
         idx = index_name or self._default_index
@@ -171,11 +199,9 @@ class ESClient:
             }
             if query:
                 body["query"] = {
-                    "multi_match": {
+                    "query_string": {
                         "query": query,
-                        "fields": ["*"],
-                        "type": "best_fields",
-                        "fuzziness": "AUTO"
+                        "default_operator": "AND"
                     }
                 }
             else:

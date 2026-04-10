@@ -113,17 +113,18 @@ class TestInsightsE2E:
         r = requests.get(f"{BASE}/v1/insights", params={"datasource": "qsint_docs"}, timeout=120)
         assert r.status_code == 200
         data = r.json()
-        # Must have the 5 insight categories
-        for key in ("hot_topics", "narratives", "trends", "entities", "anomalies"):
-            assert key in data
+        assert "tasks" in data
+        assert "summary" in data["tasks"]
+        assert "ner" in data["tasks"]
+        assert "graph" in data["tasks"]
+        assert "stats" in data["tasks"]
 
     def test_insights_refresh_updates_cache(self):
-        r1 = requests.get(f"{BASE}/v1/insights", timeout=120)
-        ts1 = r1.json().get("_meta", {}).get("generated_at")
+        r1 = requests.get(f"{BASE}/v1/insights", params={"datasource": "qsint_docs_global"}, timeout=120)
+        ts1 = r1.json().get("_meta", {}).get("refresh_triggered")
 
-        r2 = requests.post(f"{BASE}/v1/insights/refresh", json={}, timeout=120)
+        r2 = requests.post(f"{BASE}/v1/insights/refresh", json={"datasource": "qsint_docs_global"}, timeout=120)
         assert r2.status_code == 200
-        ts2 = r2.json().get("_meta", {}).get("generated_at")
 
         # Refreshed timestamp should differ (unless exact same second)
-        assert r2.json()["_meta"]["cached"] is False
+        assert r2.json()["_meta"]["refresh_triggered"] is True
