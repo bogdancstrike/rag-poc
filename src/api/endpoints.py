@@ -1013,12 +1013,21 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
         try:
             if category == "insight":
                 from src.rag.insights_engine import get_insights_engine
+                from src.worker.kafka_producer import publish_task
                 engine = get_insights_engine()
 
-                # Mark pending and publish coordinator task
+                # Publish only the specific task that was requested, not the coordinator
+                # (coordinator would re-run all sibling tasks including already-complete ones)
                 engine._set_task_status(datasource, task, "pending", "manual_restart", clear_data=True)
-                from src.worker.kafka_producer import publish_task
-                publish_task({"task_type": "insight_coordinator", "datasource": datasource})
+                if task in ("summary", "graph"):
+                    publish_task({"task_type": "insight_ai", "datasource": datasource,
+                                  "insight_type": task, "sample_hash": "manual_restart"})
+                elif task == "stats":
+                    publish_task({"task_type": "insight_stats", "datasource": datasource,
+                                  "sample_hash": "manual_restart"})
+                else:
+                    # Unknown insight type — fall back to coordinator
+                    publish_task({"task_type": "insight_coordinator", "datasource": datasource})
                 return {"status": "restarted", "task": task, "category": category}, 200
 
             elif category == "enrichment":
@@ -1031,7 +1040,10 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
                                                id_filter=[task])
                 text = ""
                 if docs:
-                    text = docs[0].get("text", "")
+                    src = docs[0]
+                    # get_documents returns raw _source fields; try common text field names
+                    text = (src.get("text") or src.get("content") or src.get("body")
+                            or src.get("description") or "").strip()
 
                 if not text:
                     return {"error": "Document text not found for enrichment restart"}, 404

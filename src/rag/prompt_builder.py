@@ -45,21 +45,32 @@ FORMAT RULES:
 3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
 """
 
-INSIGHTS_GRAPH_PROMPT = """Detect relationships between named entities (people, organizations, locations, tools, events) across ALL provided documents.
-Build a rich knowledge graph that captures the full breadth of relationships in the corpus — do NOT use document IDs as node IDs.
+INSIGHTS_GRAPH_PROMPT = """Detect communities of related entities across ALL provided documents and build a knowledge graph centred on those communities.
+
+OBJECTIVE: Discover clusters (communities) of entities that share significant relationships. Prioritise entities with multiple connections — isolated nodes with no edges add no value and should be omitted.
+
+STRICT GROUNDING RULES (MOST IMPORTANT):
+- Use ONLY entities, relationships, and facts that are explicitly present in the provided documents. Do NOT invent, infer, guess, or fabricate ANY entity, edge, relationship, or attribute.
+- Do NOT rely on prior/background knowledge about real-world actors, groups, tools, or events. If it is not in the source text, it does not exist for this task.
+- Every node MUST correspond to an entity literally mentioned in the documents. Every edge MUST correspond to a relationship that is directly stated or unambiguously supported by the text.
+- If the documents do not contain enough connected entities to reach the suggested node/edge counts, return FEWER nodes and edges rather than padding with invented ones. Quality and faithfulness to the source override target counts.
+- Do NOT normalise entity names to "canonical" real-world forms if the document uses a different form — preserve the name as it appears in the source (you may merge obvious aliases only if both forms appear in the documents).
+- Relationship labels must describe what the text actually says, not assumed or typical relationships between such entities in the real world.
+- If you are uncertain whether a relationship is supported by the text, OMIT it.
 
 FORMAT RULES:
 1. Output ONLY valid JSON, no markdown, no comments.
-2. Use the entity name itself as the node "id" (e.g., "LockBit", "SVR", "Ukraine").
-3. Aim for 30-60 nodes and 60-120 edges. More is better — cover the full corpus.
-4. Assign each node a "community" integer (0-based) grouping related entities into discovered communities/clusters.
+2. Use the entity name itself as the node "id" (e.g., "LockBit", "SVR", "Ukraine"), exactly as it appears in the source documents.
+3. Aim for 20-50 nodes and 40-100 edges ONLY IF the source material supports it. Every node MUST have at least 2 edges. If the documents support fewer, return fewer.
+4. Assign each node a "community" integer (0-based). Nodes in the same community share a dominant theme, actor group, or campaign as evidenced by the documents. Aim for 4-10 distinct communities, but only as many as the data genuinely supports.
 5. The JSON must have EXACTLY this structure:
 {
   "nodes": [{"id": "EntityName", "label": "EntityName", "type": "person|org|location|tool|event", "community": 0}],
   "edges": [{"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}]
 }
 6. "source" and "target" in edges MUST match node "id" values exactly.
-7. Do NOT include any other top-level keys.
+7. "weight" reflects relationship strength (0.1–1.0) based on how explicitly and frequently the relationship is described in the documents: use higher weights for edges within the same community and for relationships stated multiple times or in strong terms.
+8. Do NOT include any other top-level keys.
 """
 
 # ── Per-field enrichment prompts ───────────────────────────────────────────────
