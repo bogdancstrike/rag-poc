@@ -1036,14 +1036,7 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
                 from src.session.models import DocumentEnrichment, get_db
 
                 client = ESClient()
-                docs, _ = client.get_documents(index_name=datasource, offset=0, limit=1,
-                                               id_filter=[task])
-                text = ""
-                if docs:
-                    src = docs[0]
-                    # get_documents returns raw _source fields; try common text field names
-                    text = (src.get("text") or src.get("content") or src.get("body")
-                            or src.get("description") or "").strip()
+                text = client.get_document_text(doc_id=task, index_name=datasource)
 
                 if not text:
                     return {"error": "Document text not found for enrichment restart"}, 404

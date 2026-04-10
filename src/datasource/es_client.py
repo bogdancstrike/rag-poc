@@ -272,6 +272,28 @@ class ESClient:
             self._has_vector_cache[index_name] = False
             return False
 
+    def get_document_text(self, doc_id: str, index_name: str = None) -> str:
+        """Fetch a single document by ID and return its text content.
+
+        Uses the direct GET API (not search) for reliability.
+        Tries the same field fallback chain as _normalise_hits.
+        Returns an empty string if the document is not found or has no text.
+        """
+        idx = index_name or self._default_index
+        try:
+            resp = self._client.get(index=idx, id=doc_id)
+            src = resp.get("_source") or {}
+            return (
+                src.get("text") or src.get("content") or src.get("body")
+                or src.get("description") or ""
+            ).strip()
+        except NotFoundError:
+            logger.warning(f"[es] get_document_text: doc not found id={doc_id} index={idx}")
+            return ""
+        except Exception as e:
+            logger.error(f"[es] get_document_text error id={doc_id}: {e}")
+            return ""
+
     def index_document(self, doc_id: str, body: dict, index_name: str = None) -> bool:
         """Index (upsert) a single document. Used by seed scripts and tests."""
         idx = index_name or self._default_index

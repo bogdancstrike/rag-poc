@@ -99,9 +99,7 @@ def _recover_dangling_tasks() -> None:
             requeued, missing = 0, 0
             for doc_id, datasource in pending_enrich:
                 try:
-                    docs, _ = client.get_documents(index_name=datasource, offset=0,
-                                                   limit=1, id_filter=[doc_id])
-                    text = (docs[0].get("text", "") if docs else "").strip()
+                    text = client.get_document_text(doc_id=doc_id, index_name=datasource)
                     if text:
                         publish_task({"task_type": "enrich_doc", "datasource": datasource,
                                       "doc_id": doc_id, "text": text})
