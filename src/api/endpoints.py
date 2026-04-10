@@ -738,13 +738,24 @@ def document_enrich_stream_handler(app, operation, request, **kwargs):
                     yield f'data: {json.dumps({"type": "cached", "payload": row.payload or {}})}\n\n'
                     return
 
-                # Reset / create row
+                # Reset / create row — use merge() to handle concurrent requests
+                # that may have already inserted the row between our SELECT and now.
+                now = datetime.now(timezone.utc)
                 if not row:
-                    row = DocumentEnrichment(doc_id=doc_id, datasource=datasource, status="processing")
-                    db.add(row)
+                    row = DocumentEnrichment(
+                        doc_id=doc_id,
+                        datasource=datasource,
+                        status="processing",
+                        generated_at=now,
+                        updated_at=now,
+                        error=None,
+                        retry_count=0,
+                    )
+                    row = db.merge(row)  # INSERT or UPDATE by PK — race-safe
                 else:
                     row.status = "processing"
-                    row.started_at = datetime.now(timezone.utc)
+                    row.started_at = now
+                    row.updated_at = now
                     row.error = None
                 db.commit()
         except Exception as e:
