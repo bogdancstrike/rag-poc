@@ -31,13 +31,11 @@ class Config:
     LLM_BASE_URL    = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
     LLM_MODEL       = os.getenv("LLM_MODEL", "qwen3.5:9b")
     LLM_MAX_TOKENS  = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-    # JSON completion needs a higher budget: reasoning models burn thinking tokens
-    # from the same max_tokens pool before generating actual output.
-    LLM_JSON_MAX_TOKENS = int(os.getenv("LLM_JSON_MAX_TOKENS", "16384"))
+    LLM_JSON_MAX_TOKENS = int(os.getenv("LLM_JSON_MAX_TOKENS", "2048"))
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     # Hard wall-clock timeout for a single LLM API call (seconds).
     # Ollama can hang indefinitely on model load or OOM — this unblocks the worker.
-    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "180"))
+    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "300"))
 
     # Number of document chunks to retrieve per query (upper bound)
     RAG_TOP_K = int(os.getenv("RAG_TOP_K", "20"))

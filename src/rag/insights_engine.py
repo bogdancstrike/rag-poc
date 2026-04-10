@@ -303,12 +303,15 @@ class InsightsEngine:
                             InsightsCache.datasource == datasource,
                             InsightsCache.insight_type == ttype
                         ).first()
+                        now = datetime.now(timezone.utc)
                         if not row:
-                            row = InsightsCache(datasource=datasource, insight_type=ttype)
+                            row = InsightsCache(datasource=datasource, insight_type=ttype,
+                                               generated_at=now)
                             db.add(row)
                         row.status = status
                         row.sample_hash = sample_hash
-                        row.generated_at = datetime.now(timezone.utc)
+                        if status == "processing":
+                            row.started_at = now
                         if clear_data:
                             row.payload = None
                             row.error = None

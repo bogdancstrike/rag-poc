@@ -32,6 +32,10 @@ from src.config import Config
 from framework.app import FrameworkApp, FrameworkSettings
 from framework.commons.logger import logger
 
+# Suppress Werkzeug's per-request access log lines (127.0.0.1 - - GET ...)
+import logging
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
 
 def _signal_handler(signum, frame):
     """Handle SIGTERM/SIGINT for graceful shutdown."""

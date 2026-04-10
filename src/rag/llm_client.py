@@ -50,8 +50,9 @@ class LLMClient:
         Returns:
             The assistant's reply as a plain string.
         """
-        no_think_system = (system.rstrip() + "\n/no_think") if system else "/no_think"
-        full_messages = self._build_messages(messages, no_think_system)
+        if "qwen3" in self._model.lower():
+            system = (system.rstrip() + "\n/no_think") if system else "/no_think"
+        full_messages = self._build_messages(messages, system)
         with tracer.start_as_current_span("llm.complete") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
@@ -121,12 +122,12 @@ class LLMClient:
         /no_think system-prompt token (model-level, always works) and the
         options.think=false Ollama parameter (API-level, requires Ollama ≥0.6).
         """
-        # Append /no_think to skip the reasoning chain — JSON extraction tasks do
-        # not need long think budgets and thinking makes them 3-5× slower.
-        # NOTE: keep the document text at the END of the user message (after the
-        # schema/instructions) so the model doesn't respond with a "ready" template.
-        no_think_system = (system.rstrip() + "\n/no_think") if system else "/no_think"
-        full_messages = self._build_messages(messages, no_think_system)
+        # /no_think suppresses the Qwen3 reasoning chain at the model level.
+        # Only append it for Qwen3 models — Qwen2.5 has no thinking mode and the
+        # token confuses it, causing empty {} responses.
+        if "qwen3" in self._model.lower():
+            system = (system.rstrip() + "\n/no_think") if system else "/no_think"
+        full_messages = self._build_messages(messages, system)
         with tracer.start_as_current_span("llm.complete_json") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
@@ -135,15 +136,12 @@ class LLMClient:
                     model=self._model,
                     messages=full_messages,
                     max_tokens=Config.LLM_JSON_MAX_TOKENS,
-                    temperature=0.0,   # Deterministic as possible for JSON
+                    temperature=0.0,
                     stream=False,
                     response_format={"type": "json_object"},
-                    # Ollama: expand context window to 16K so insights/enrichment
-                    # prompts fit. Do NOT pass think=false — on qwen3.5 it causes
-                    # the model to output {} instead of real JSON when combined with
-                    # response_format. Let the model think freely; reasoning tokens
-                    # go to the separate 'reasoning' field, content stays clean JSON.
-                    extra_body={"options": {"num_ctx": 16384}},
+                    # num_ctx=8192 is plenty for enrichment prompts + JSON output
+                    # and is much faster than 16K on small models.
+                    extra_body={"options": {"num_ctx": 8192}},
                 )
                 content = resp.choices[0].message.content or "{}"
                 # Strip any residual <think>...</think> blocks (Qwen3 / reasoning

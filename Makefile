@@ -15,7 +15,7 @@ logs:
 
 # Pull Ollama model (run after Ollama container is up)
 pull-model:
-	docker compose exec ollama ollama pull qwen3:4b
+	docker compose exec ollama ollama pull qwen2.5:7b
 
 # ── Backend (local dev) ───────────────────────────────────────────────────────
 install:
