@@ -61,7 +61,7 @@ export function SavedSearchesDrawer({ open, onClose, onApply }: Props) {
         </Space>
       }
       placement="right"
-      width={440}
+      styles={{ wrapper: { width: '440px' } }}
       open={open}
       onClose={onClose}
     >

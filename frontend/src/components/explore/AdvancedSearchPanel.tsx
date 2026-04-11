@@ -74,7 +74,7 @@ export function AdvancedSearchPanel({
     <Drawer
       title="Advanced Search"
       placement="right"
-      width={420}
+      styles={{ wrapper: { width: '420px' } }}
       open={open}
       onClose={onClose}
       extra={

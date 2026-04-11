@@ -190,8 +190,10 @@ export function TasksPage({ onViewTask }: Props) {
     filterIcon: (filtered: boolean) => (
       <SearchOutlined style={{ color: filtered ? token.colorPrimary : undefined }} />
     ),
-    onFilterDropdownOpenChange: (open: boolean) => {
-      if (open) setTimeout(() => searchInputRef.current?.select(), 100)
+    filterDropdownProps: {
+      onOpenChange: (open: boolean) => {
+        if (open) setTimeout(() => searchInputRef.current?.select(), 100)
+      },
     },
   })
 
@@ -201,6 +203,7 @@ export function TasksPage({ onViewTask }: Props) {
       dataIndex: 'id',
       key: 'id',
       width: 160,
+      filteredValue: null,
       render: (id: string, r: Task) => (
         <Space orientation="vertical" size={0}>
           <Tooltip title={id}>
@@ -248,6 +251,7 @@ export function TasksPage({ onViewTask }: Props) {
       key: 'doc_id',
       width: 130,
       ellipsis: true,
+      filteredValue: null,
       render: (v: string | null) =>
         v ? (
           <Tooltip title={v}>
@@ -281,6 +285,7 @@ export function TasksPage({ onViewTask }: Props) {
       key: 'retry_count',
       width: 70,
       align: 'center',
+      filteredValue: null,
       sortOrder: sortField === 'retry_count' ? (sortDir + 'end') as SortOrder : undefined,
       sorter: true,
       render: (v: number) =>
@@ -291,6 +296,7 @@ export function TasksPage({ onViewTask }: Props) {
       dataIndex: 'generated_at',
       key: 'generated_at',
       width: 130,
+      filteredValue: null,
       sortOrder: sortField === 'generated_at' ? (sortDir + 'end') as SortOrder : undefined,
       sorter: true,
       render: (v: string) => <LocalTimestamp value={v} />,
@@ -300,6 +306,7 @@ export function TasksPage({ onViewTask }: Props) {
       dataIndex: 'started_at',
       key: 'started_at',
       width: 130,
+      filteredValue: null,
       sortOrder: sortField === 'started_at' ? (sortDir + 'end') as SortOrder : undefined,
       sorter: true,
       render: (v: string) => <LocalTimestamp value={v} />,
@@ -309,6 +316,7 @@ export function TasksPage({ onViewTask }: Props) {
       dataIndex: 'updated_at',
       key: 'updated_at',
       width: 130,
+      filteredValue: null,
       sortOrder: sortField === 'updated_at' ? (sortDir + 'end') as SortOrder : undefined,
       sorter: true,
       defaultSortOrder: 'descend',
@@ -319,6 +327,7 @@ export function TasksPage({ onViewTask }: Props) {
       key: 'queue_time',
       width: 80,
       align: 'right' as const,
+      filteredValue: null,
       render: (_: any, r: Task) => (
         <Tooltip title="Time between created and started (queue wait)">
           <Duration from={r.generated_at} to={r.started_at} />
@@ -330,6 +339,7 @@ export function TasksPage({ onViewTask }: Props) {
       key: 'exec_time',
       width: 80,
       align: 'right' as const,
+      filteredValue: null,
       render: (_: any, r: Task) => (
         <Tooltip title="Execution time (started → last update)">
           <Duration from={r.started_at} to={r.updated_at} />
@@ -342,6 +352,7 @@ export function TasksPage({ onViewTask }: Props) {
       key: 'error',
       ellipsis: true,
       ...colSearch('task_type', 'Filter by error text'),
+      filteredValue: null,
       render: (v: string | null) =>
         v ? (
           <Tooltip title={v}>

@@ -1256,7 +1256,7 @@ export function DataTable({
         {expandedDoc && (
           <div style={{ flex: '0 0 45%', height: '100%', overflow: 'hidden' }}>
             <DocumentDetailPanel
-              datasource={datasource}
+              datasource={datasource || (expandedDoc as any)._source_index || ''}
               doc={expandedDoc}
               reviewStatus={statusMap?.[expandedDoc.id] ?? null}
               onStatusChange={(status) => setStatus.mutate({ docId: expandedDoc.id, status })}
