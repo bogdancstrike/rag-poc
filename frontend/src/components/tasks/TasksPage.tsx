@@ -15,7 +15,7 @@ import { useSearchParams } from 'react-router-dom'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import relativeTime from 'dayjs/plugin/relativeTime'
-import { useTasks, useRestartTask, useDeleteTask } from '@/hooks/useTasks'
+import { useTasks, useRestartTask, useDeleteTask, useRestartActiveTasks } from '@/hooks/useTasks'
 import type { Task, TaskStatus, TaskCategory, TaskFilters } from '@/api/tasks'
 import { useIndices } from '@/hooks/useExplore'
 import { TaskAnalyticsPanel } from './TaskAnalyticsPanel'
@@ -147,8 +147,9 @@ export function TasksPage({ onViewTask }: Props) {
   }, [filters, showAnalytics])
 
   const { data, isLoading, error, refetch, isFetching } = useTasks(filters)
-  const restartMut = useRestartTask()
-  const deleteMut  = useDeleteTask()
+  const restartMut       = useRestartTask()
+  const deleteMut        = useDeleteTask()
+  const restartActiveMut = useRestartActiveTasks()
 
   const tasks  = data?.tasks  ?? []
   const stats  = data?.stats  ?? {}
@@ -506,6 +507,22 @@ export function TasksPage({ onViewTask }: Props) {
           <Button size="small" icon={<ReloadOutlined />} onClick={() => refetch()}>
             Refresh
           </Button>
+          <Popconfirm
+            title="Restart all active tasks?"
+            description={`This will re-queue ${ (stats.pending ?? 0) + (stats.processing ?? 0) } tasks. Continue?`}
+            onConfirm={() => restartActiveMut.mutate()}
+            okText="Restart All"
+            cancelText="No"
+          >
+            <Button
+              size="small"
+              icon={<SyncOutlined />}
+              loading={restartActiveMut.isPending}
+              disabled={(stats.pending ?? 0) + (stats.processing ?? 0) === 0}
+            >
+              Restart Active ({ (stats.pending ?? 0) + (stats.processing ?? 0) })
+            </Button>
+          </Popconfirm>
         </Space>
       </Row>
 

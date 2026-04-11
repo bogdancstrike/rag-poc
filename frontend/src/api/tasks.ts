@@ -83,6 +83,11 @@ export const restartTask = async (
   await apiClient.post('/v1/dashboard/tasks/restart', { task_category, datasource, task })
 }
 
+export const restartActiveTasks = async (): Promise<{ restarted_count: number }> => {
+  const { data } = await apiClient.post('/v1/tasks/restart-active')
+  return data
+}
+
 export const deleteTask = async (
   task_category: TaskCategory,
   datasource: string,

@@ -73,18 +73,30 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
     )
   }
 
-  const tasks       = insights?.tasks || {}
-  const meta        = insights?._meta
-  const summaryTask = tasks.summary || { status: 'pending' }
-  const graphTask   = tasks.graph   || { status: 'pending' }
-  const statsTask   = tasks.stats   || { status: 'pending' }
+  const tasks = insights?.tasks || {}
+  const meta  = insights?._meta
 
-  const activeTaskKeys = ['summary', 'graph', 'stats']
+  // ── AI Tasks ──
+  const trendingTask    = tasks.trending_signals     || { status: 'pending' }
+  const narrativesTask  = tasks.active_narratives     || { status: 'pending' }
+  const topicsTask      = tasks.hot_topics_sentiment || { status: 'pending' }
+  const networkTask     = tasks.relationship_network || { status: 'pending' }
+
+  // ── Fast Tasks ──
+  const statsTask       = tasks.corpus_statistics    || { status: 'pending' }
+  const regionsTask     = tasks.top_regions          || { status: 'pending' }
+  const entitiesTask    = tasks.top_entities         || { status: 'pending' }
+  const platformsTask   = tasks.top_platforms        || { status: 'pending' }
+
+  const aiTaskKeys    = ['trending_signals', 'active_narratives', 'hot_topics_sentiment', 'relationship_network']
+  const statsTaskKeys = ['corpus_statistics', 'top_regions', 'top_entities', 'top_platforms']
+  const allTaskKeys   = [...aiTaskKeys, ...statsTaskKeys]
+
   const isProcessing = meta?.is_processing ||
-    activeTaskKeys.some((k) => tasks[k]?.status === 'processing' || tasks[k]?.status === 'pending')
+    allTaskKeys.some((k) => tasks[k]?.status === 'processing' || tasks[k]?.status === 'pending')
 
-  const generatedAt = summaryTask.generated_at
-    ? dayjs.utc(summaryTask.generated_at).local().fromNow()
+  const generatedAt = topicsTask.generated_at
+    ? dayjs.utc(topicsTask.generated_at).local().fromNow()
     : '—'
 
   /** Task card header with status indicator and restart button. */
@@ -151,19 +163,27 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
   const handleSendInsightsToRag = () => {
     if (!onSendToRag) return
     const parts: string[] = []
-    if (summaryTask.payload?.hot_topics?.length) {
+    if (topicsTask.payload?.hot_topics?.length) {
       parts.push(
         'Hot Topics:\n' +
-          summaryTask.payload.hot_topics
-            .map((t: any) => `- ${t.topic} [${t.sentiment}]: ${t.summary}`)
+          topicsTask.payload.hot_topics
+            .map((t: any) => `- ${t.topic} [${t.sentiment_label}]: ${t.brief_context}`)
             .join('\n'),
       )
     }
-    if (summaryTask.payload?.narratives?.length) {
+    if (narrativesTask.payload?.active_narratives?.length) {
       parts.push(
         'Active Narratives:\n' +
-          summaryTask.payload.narratives
+          narrativesTask.payload.active_narratives
             .map((n: any) => `- ${n.title}: ${n.description}`)
+            .join('\n'),
+      )
+    }
+    if (trendingTask.payload?.trending_signals?.length) {
+      parts.push(
+        'Trending Signals:\n' +
+          trendingTask.payload.trending_signals
+            .map((s: any) => `- ${s.label} [${s.direction}]: ${s.change_summary}`)
             .join('\n'),
       )
     }
@@ -197,7 +217,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                   size="small"
                   icon={<SendOutlined />}
                   onClick={handleSendInsightsToRag}
-                  disabled={!summaryTask.payload}
+                  disabled={!topicsTask.payload && !narrativesTask.payload}
                 >
                   Send to RAG
                 </Button>
@@ -226,11 +246,11 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
         </Row>
       </Card>
 
-      {/* ── Corpus Statistics ── */}
+      {/* ── Corpus Statistics (Combined Fast Tasks) ── */}
       <Card
         variant="borderless"
         title={renderTaskHeader('Corpus Statistics', statsTask,
-          <BarChartOutlined style={{ color: token.colorInfo }} />, 'stats', 'static')}
+          <BarChartOutlined style={{ color: token.colorInfo }} />, 'corpus_statistics', 'static')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '12px 16px 16px' } }}
       >
@@ -256,36 +276,48 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
               <Col span={20}>
                 <Row gutter={12}>
                   <Col span={8}>
-                    <Text strong style={{ fontSize: 12 }}>Top Platforms</Text>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text strong style={{ fontSize: 12 }}>Top Platforms</Text>
+                      {platformsTask.status === 'processing' && <SyncOutlined spin style={{ fontSize: 10 }} />}
+                    </div>
                     <Table
-                      dataSource={statsTask.payload.platforms || []}
+                      dataSource={platformsTask.payload?.platforms || []}
                       columns={staticCols}
                       size="small"
                       pagination={false}
                       rowKey="label"
                       scroll={{ y: 160 }}
+                      locale={{ emptyText: platformsTask.status === 'pending' ? 'Waiting...' : 'No data' }}
                     />
                   </Col>
                   <Col span={8}>
-                    <Text strong style={{ fontSize: 12 }}>Top Regions</Text>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text strong style={{ fontSize: 12 }}>Top Regions</Text>
+                      {regionsTask.status === 'processing' && <SyncOutlined spin style={{ fontSize: 10 }} />}
+                    </div>
                     <Table
-                      dataSource={statsTask.payload.regions || []}
+                      dataSource={regionsTask.payload?.regions || []}
                       columns={staticCols}
                       size="small"
                       pagination={false}
                       rowKey="label"
                       scroll={{ y: 160 }}
+                      locale={{ emptyText: regionsTask.status === 'pending' ? 'Waiting...' : 'No data' }}
                     />
                   </Col>
                   <Col span={8}>
-                    <Text strong style={{ fontSize: 12 }}>Top Entities</Text>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text strong style={{ fontSize: 12 }}>Top Entities</Text>
+                      {entitiesTask.status === 'processing' && <SyncOutlined spin style={{ fontSize: 10 }} />}
+                    </div>
                     <Table
-                      dataSource={statsTask.payload.entities || []}
+                      dataSource={entitiesTask.payload?.entities || []}
                       columns={staticCols}
                       size="small"
                       pagination={false}
                       rowKey="label"
                       scroll={{ y: 160 }}
+                      locale={{ emptyText: entitiesTask.status === 'pending' ? 'Waiting...' : 'No data' }}
                     />
                   </Col>
                 </Row>
@@ -315,15 +347,15 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
       {/* ── Hot Topics ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader('Hot Topics & Sentiment', summaryTask,
-          <FireOutlined style={{ color: token.colorWarning }} />, 'summary', 'ai')}
+        title={renderTaskHeader('Hot Topics & Sentiment', topicsTask,
+          <FireOutlined style={{ color: token.colorWarning }} />, 'hot_topics_sentiment', 'ai')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '8px 16px 16px' } }}
       >
-        {summaryTask.payload ? (
+        {topicsTask.payload ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {(summaryTask.payload.hot_topics || []).slice(0, 10).map((t: any, i: number) => {
-              const sent = normaliseSentiment(t.sentiment)
+            {(topicsTask.payload.hot_topics || []).map((t: any, i: number) => {
+              const sent = normaliseSentiment(t.sentiment_label)
               const sentColor =
                 sent === 'positive' ? token.colorSuccess :
                 sent === 'negative' ? token.colorError :
@@ -332,8 +364,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                 sent === 'positive' ? 'rgba(82,196,26,0.06)' :
                 sent === 'negative' ? 'rgba(255,77,79,0.06)' :
                 token.colorFillAlter
-              const max = Math.max(...(summaryTask.payload.hot_topics || []).map((x: any) => x.count_estimate || 0), 1)
-              const pct = Math.round(((t.count_estimate || 0) / max) * 100)
+              
               return (
                 <div
                   key={i}
@@ -352,15 +383,10 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                         color={SENTIMENT_COLOR[sent]}
                         style={{ fontSize: 10, margin: 0, flexShrink: 0 }}
                       >
-                        {sent.toUpperCase()}
+                        {(t.sentiment_label || sent).toUpperCase()}
                       </Tag>
                     </Space>
                     <Space size={6} style={{ flexShrink: 0, marginLeft: 12 }}>
-                      {t.count_estimate > 0 && (
-                        <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
-                          ~{t.count_estimate} mentions
-                        </Text>
-                      )}
                       <Tooltip title={`Ask RAG Chat about "${t.topic}"`}>
                         <Button
                           size="small"
@@ -374,19 +400,10 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                       </Tooltip>
                     </Space>
                   </Row>
-                  {t.summary && (
+                  {t.brief_context && (
                     <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-                      {t.summary}
+                      {t.brief_context}
                     </Text>
-                  )}
-                  {pct > 0 && (
-                    <Progress
-                      percent={pct}
-                      showInfo={false}
-                      size={[undefined, 3]}
-                      strokeColor={sentColor}
-                      style={{ marginTop: 6, marginBottom: 0 }}
-                    />
                   )}
                 </div>
               )
@@ -398,16 +415,16 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
       {/* ── Active Narratives ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader('Active Narratives', summaryTask,
-          <BookOutlined style={{ color: '#fa541c' }} />, 'summary', 'ai')}
+        title={renderTaskHeader('Active Narratives', narrativesTask,
+          <BookOutlined style={{ color: '#fa541c' }} />, 'active_narratives', 'ai')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '8px 16px 16px' } }}
       >
-        {summaryTask.payload ? (
-          summaryTask.payload.narratives?.length > 0 ? (
+        {narrativesTask.payload ? (
+          narrativesTask.payload.active_narratives?.length > 0 ? (
             <List
               size="small"
-              dataSource={(summaryTask.payload.narratives || []).slice(0, 5)}
+              dataSource={(narrativesTask.payload.active_narratives || []).slice(0, 5)}
               renderItem={(narrative: any, i: number) => (
                 <List.Item
                   key={i}
@@ -430,10 +447,9 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                         <Paragraph style={{ margin: '4px 0', fontSize: 13 }}>
                           {narrative.description}
                         </Paragraph>
-                        {narrative.evidence_docs?.length > 0 && (
+                        {narrative.key_actors?.length > 0 && (
                           <Text type="secondary" style={{ fontSize: 11 }}>
-                            Evidence: {narrative.evidence_docs.slice(0, 3).join(', ')}
-                            {narrative.evidence_docs.length > 3 ? ` +${narrative.evidence_docs.length - 3} more` : ''}
+                            Actors: {narrative.key_actors.join(', ')}
                           </Text>
                         )}
                       </div>
@@ -448,26 +464,27 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
         ) : renderLoading()}
       </Card>
 
-      {/* ── Trends ── */}
+      {/* ── Trending Signals ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader('Trending Signals', summaryTask,
-          <RiseOutlined style={{ color: token.colorSuccess }} />, 'summary', 'ai')}
+        title={renderTaskHeader('Trending Signals', trendingTask,
+          <RiseOutlined style={{ color: token.colorSuccess }} />, 'trending_signals', 'ai')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '8px 16px 16px' } }}
       >
-        {summaryTask.payload ? (
+        {trendingTask.payload ? (
           <div>
-            <TrendAreaChart trends={summaryTask.payload.trends || []} height={180} />
-            {summaryTask.payload.trends?.length > 0 && (
+            {/* We can still use the chart if payload has trends, or add logic to adapt it */}
+            <TrendAreaChart trends={trendingTask.payload.trending_signals || []} height={180} />
+            {trendingTask.payload.trending_signals?.length > 0 && (
               <Row gutter={[10, 10]} style={{ marginTop: 12 }}>
-                {(summaryTask.payload.trends || []).slice(0, 10).map((t: any, i: number) => {
+                {(trendingTask.payload.trending_signals || []).slice(0, 10).map((t: any, i: number) => {
                   const trendColor =
                     t.direction === 'rising' ? token.colorSuccess :
                     t.direction === 'falling' ? token.colorError :
                     token.colorTextSecondary
                   return (
-                    <Col key={i} xs={12} sm={8} md={6} lg={4}>
+                    <Col key={i} xs={12} sm={8} md={6}>
                       <div style={{
                         background: token.colorFillAlter,
                         borderRadius: token.borderRadius,
@@ -479,22 +496,9 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                         <Text style={{ fontSize: 11, display: 'block', lineHeight: 1.3 }}>
                           {DIRECTION_ICON[t.direction]} {t.label}
                         </Text>
-                        {t.change_pct !== undefined && (
-                          <Text
-                            style={{
-                              fontSize: 15,
-                              fontWeight: 700,
-                              color: trendColor,
-                              display: 'block',
-                              marginTop: 4,
-                            }}
-                          >
-                            {t.change_pct > 0 ? '+' : ''}{t.change_pct?.toFixed(1)}%
-                          </Text>
-                        )}
-                        {t.time_period && (
-                          <Text type="secondary" style={{ fontSize: 10, display: 'block' }}>
-                            {t.time_period}
+                        {t.change_summary && (
+                          <Text type="secondary" style={{ fontSize: 10, display: 'block', marginTop: 4 }}>
+                            {t.change_summary}
                           </Text>
                         )}
                       </div>
@@ -510,15 +514,15 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
       {/* ── Relationship Network (D3 graph) ── */}
       <Card
         variant="borderless"
-        title={renderTaskHeader('Relationship Network', graphTask,
-          <NodeIndexOutlined style={{ color: '#722ed1' }} />, 'graph', 'ai')}
+        title={renderTaskHeader('Relationship Network', networkTask,
+          <NodeIndexOutlined style={{ color: '#722ed1' }} />, 'relationship_network', 'ai')}
         style={{ border: `1px solid ${token.colorBorderSecondary}` }}
         styles={{ body: { padding: '16px' } }}
       >
-        {graphTask.payload ? (
+        {networkTask.payload ? (
           <RelationshipGraph
-            nodes={graphTask.payload.nodes || []}
-            edges={graphTask.payload.edges || []}
+            nodes={networkTask.payload.nodes || []}
+            edges={networkTask.payload.edges || []}
             height={560}
           />
         ) : renderLoading()}

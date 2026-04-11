@@ -360,6 +360,17 @@
         "module_name": "api.endpoints",
         "method_name": "llm_stats_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_tasks_restart_active",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/tasks/restart-active",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "restart_active_tasks_handler"
+      }
     }
   ]
 }

@@ -22,26 +22,39 @@ STRICT RULES:
 6. Never invent document IDs or cite documents not in the provided context.
 """
 
-INSIGHTS_SUMMARY_SCHEMA = """{
-  "hot_topics": [
-    {"topic": "string", "count_estimate": 0, "summary": "string", "sentiment": "positive|negative|neutral"}
-  ],
-  "narratives": [
-    {"title": "string", "description": "string", "evidence_docs": ["doc_title_or_keyword"]}
-  ],
-  "trends": [
-    {"label": "string", "direction": "rising|falling|stable", "change_pct": 0.0, "time_period": "string"}
+INSIGHTS_TRENDING_SIGNALS_SCHEMA = """{
+  "trending_signals": [
+    {"label": "string", "direction": "rising|falling|stable", "change_summary": "string", "key_evidence": "string"}
   ]
 }"""
 
-INSIGHTS_SUMMARY_RULES = """Rules:
-- hot_topics: up to 10, most significant first.
-- narratives: up to 5, most impactful first.
-- trends: up to 10, based on frequency/recency patterns in the corpus.
-- Do NOT add any keys beyond hot_topics, narratives, trends."""
+INSIGHTS_TRENDING_SIGNALS_RULES = """Rules:
+- Identify rising or falling signals based on frequency, recency, and urgency.
+- Look for emerging threats, shifts in actor behavior, or new geopolitical developments.
+- Up to 8 signals, most significant first."""
 
-# Keep old name as alias so any other caller still works
-INSIGHTS_SUMMARY_PROMPT = INSIGHTS_SUMMARY_SCHEMA
+INSIGHTS_ACTIVE_NARRATIVES_SCHEMA = """{
+  "active_narratives": [
+    {"title": "string", "description": "string", "sentiment": "string", "key_actors": ["string"]}
+  ]
+}"""
+
+INSIGHTS_ACTIVE_NARRATIVES_RULES = """Rules:
+- Discover high-level storylines or disinformation campaigns running through the documents.
+- Identify the core message, its sentiment, and the primary actors involved.
+- Up to 5 narratives."""
+
+INSIGHTS_HOT_TOPICS_SENTIMENT_SCHEMA = """{
+  "hot_topics": [
+    {"topic": "string", "sentiment_score": 0.0, "sentiment_label": "positive|negative|neutral|hostile", "brief_context": "string"}
+  ]
+}"""
+
+INSIGHTS_HOT_TOPICS_SENTIMENT_RULES = """Rules:
+- List discrete topics mentioned across the corpus.
+- sentiment_score: -1.0 (hostile) to 1.0 (positive).
+- brief_context: 1 sentence explaining the topic's relevance.
+- Up to 15 topics."""
 
 INSIGHTS_NER_PROMPT = """Extract named entities from the provided documents.
 FORMAT RULES:
@@ -165,6 +178,10 @@ INSIGHTS_GRAPH_RULES = """Rules (read INSIGHTS_GRAPH_PROMPT for full NER+graph i
 - "source" and "target" must match node "id" values exactly.
 - Assign community integers (0-based) grouping nodes that share a theme/actor/storyline.
 - Do NOT add any keys beyond nodes and edges."""
+
+# Aliases for the new granular task naming convention
+INSIGHTS_RELATIONSHIP_NETWORK_SCHEMA = INSIGHTS_GRAPH_SCHEMA
+INSIGHTS_RELATIONSHIP_NETWORK_RULES = INSIGHTS_GRAPH_RULES
 
 # ── Per-field enrichment prompts ───────────────────────────────────────────────
 
@@ -422,56 +439,32 @@ class PromptBuilder:
     #     )
     #     return messages, system
 
-    def build_insights_messages(self, sample_docs: list[dict], task_type: str = "summary") -> tuple[list[dict], str]:
-        """Build the messages list for the insights generation call.
+    def build_insights_messages(self, sample_docs: list[dict], task_type: str = "hot_topics_sentiment") -> tuple[list[dict], str]:
+        """Build the messages list for the granular insights generation calls."""
 
-        Packs as many documents as possible into the configured context window,
-        sending full document text for each one rather than tiny snippets.
-
-        Budget calculation
-        ------------------
-        # We reserve 8k tokens for the response to ensure complex
-        # extractions (like graphs) don't get truncated.
-        RESPONSE_RESERVE_TOKENS = 8000
-
-        available_chars = (LLM_INSIGHTS_CTX - RESPONSE_RESERVE_TOKENS) * LLM_CHARS_PER_TOKEN
-                          − LLM_INSIGHTS_RESERVE_CHARS
-
-        Documents are packed greedily in sample order: each document gets its
-        full text up to the remaining budget. When the budget is exhausted the
-        loop stops, so later documents are silently dropped rather than all
-        documents getting tiny truncated snippets.
-
-        For a 64 k-token context (≈ 224 k chars) and an 10 k-char reserve:
-          · ~214 k chars available for document content
-          · A 500-char doc → ~428 full-text documents fit
-          · A 2 000-char doc → ~107 full-text documents fit
-        Either way this is dramatically better than 40 docs × 120-char snippets.
-        """
-        prompt_map = {
-            "summary": INSIGHTS_SUMMARY_PROMPT,
-            "graph": INSIGHTS_GRAPH_PROMPT,
+        # ── Map Task Types to Schemas/Rules ──────────────────────────────────
+        task_config = {
+            "trending_signals":      (INSIGHTS_TRENDING_SIGNALS_SCHEMA, INSIGHTS_TRENDING_SIGNALS_RULES),
+            "active_narratives":     (INSIGHTS_ACTIVE_NARRATIVES_SCHEMA, INSIGHTS_ACTIVE_NARRATIVES_RULES),
+            "hot_topics_sentiment":  (INSIGHTS_HOT_TOPICS_SENTIMENT_SCHEMA, INSIGHTS_HOT_TOPICS_SENTIMENT_RULES),
+            "relationship_network":  (INSIGHTS_RELATIONSHIP_NETWORK_SCHEMA, INSIGHTS_RELATIONSHIP_NETWORK_RULES),
         }
-        system_prompt = prompt_map.get(task_type, INSIGHTS_SUMMARY_PROMPT)
+
+        # Compatibility fallback for old names
+        if task_type == "summary": task_type = "hot_topics_sentiment"
+        if task_type == "graph":   task_type = "relationship_network"
+
+        schema, rules = task_config.get(task_type, (INSIGHTS_HOT_TOPICS_SENTIMENT_SCHEMA, INSIGHTS_HOT_TOPICS_SENTIMENT_RULES))
 
         # ── Budget ─────────────────────────────────────────────────────────────
-        # Calculate the total window in tokens
         total_window_tokens = Config.LLM_INSIGHTS_CTX
-
-        # Reserve tokens for the LLM's output response
         RESPONSE_RESERVE_TOKENS = 8000
 
-        if task_type == "graph":
-            # For graph extraction, we use a smaller input context (32k tokens)
-            # to ensure the model doesn't time out during reasoning/generation.
-            # We cap it by the total window to avoid overflow.
-            input_budget_tokens = min(32000, total_window_tokens - RESPONSE_RESERVE_TOKENS)
-        else:
-            input_budget_tokens = total_window_tokens - RESPONSE_RESERVE_TOKENS
+        # We cap input budget to ensures the model doesn't time out during reasoning.
+        # Graph (network) and Narratives usually need more reasoning, so we use 32k.
+        # Others can use slightly more if available, but 32k is a very safe limit for 3B/8B models.
+        input_budget_tokens = min(32000, total_window_tokens - RESPONSE_RESERVE_TOKENS)
 
-        # Convert the token budget to characters
-        # Note: If LLM_CHARS_PER_TOKEN is 4, but your data is dense (JSON/Special Chars),
-        # consider lowering this multiplier to 3.5 for a safer buffer.
         total_input_chars = int(input_budget_tokens * Config.LLM_CHARS_PER_TOKEN)
         available_chars = total_input_chars - Config.LLM_INSIGHTS_RESERVE_CHARS
 
@@ -484,34 +477,28 @@ class PromptBuilder:
             sentiment = (doc.get("sentiment") or "").strip()
             text = (doc.get("text") or "").strip()
 
-            # Fixed metadata portion (always included)
             meta_parts: list[str] = []
             if title:     meta_parts.append(f"title={title!r}")
             if topic:     meta_parts.append(f"topic={topic!r}")
             if sentiment: meta_parts.append(f"sentiment={sentiment!r}")
 
             meta_str = ", ".join(meta_parts)
-            # Estimate chars consumed by this doc before adding text
-            overhead = len(meta_str) + 12  # Increased buffer for text key and formatting
-
+            overhead = len(meta_str) + 12
             remaining_for_text = available_chars - used_chars - overhead
 
-            # If we can't fit at least a small sentence (e.g. 60 chars), skip this doc
             if remaining_for_text < 60:
                 break
 
-            # Pack as much text as fits
             if text:
                 if len(text) <= remaining_for_text:
                     meta_parts.append(f"text={text!r}")
                 else:
-                    # Truncate text to fit; mark truncation with ellipsis
                     trimmed = text[:remaining_for_text - 5].rstrip()
                     meta_parts.append(f"text={trimmed!r}...")
 
             line = f"[{', '.join(meta_parts)}]"
             doc_lines.append(line)
-            used_chars += len(line) + 1  # +1 for the trailing newline
+            used_chars += len(line) + 1
 
         n = len(doc_lines)
         approx_tokens = int(used_chars / Config.LLM_CHARS_PER_TOKEN)
@@ -523,20 +510,7 @@ class PromptBuilder:
             f"leaving ~{RESPONSE_RESERVE_TOKENS} tokens for response."
         )
 
-        # Select the schema + rules that go AFTER the corpus
-        if task_type == "graph":
-            schema = INSIGHTS_GRAPH_SCHEMA
-            rules = INSIGHTS_GRAPH_RULES
-        else:
-            schema = INSIGHTS_SUMMARY_SCHEMA
-            rules = INSIGHTS_SUMMARY_RULES
-
         doc_block = "\n".join(doc_lines)
-
-        # ── Corpus-first layout ────────────────────────────────────────────────
-        # The schema appears AFTER the documents so the model's last instruction
-        # before generating is the output format — not a schema it read hundreds
-        # of documents ago and has since forgotten.
         content = (
             f"=== INTELLIGENCE CORPUS ({n} documents) ===\n"
             f"{doc_block}\n"
@@ -555,6 +529,7 @@ class PromptBuilder:
             "Do not output any text before or after the JSON object."
         )
         return messages, system
+
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

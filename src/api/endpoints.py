@@ -1089,14 +1089,23 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
                 # Publish only the specific task that was requested, not the coordinator
                 # (coordinator would re-run all sibling tasks including already-complete ones)
                 engine._set_task_status(datasource, task, "pending", "manual_restart", clear_data=True)
-                if task in ("summary", "graph"):
+                
+                stats_tasks = ["corpus_statistics", "top_regions", "top_entities", "top_platforms"]
+                ai_tasks = ["trending_signals", "relationship_network", "active_narratives", "hot_topics_sentiment"]
+                
+                # Compatibility fallback for old names
+                if task == "summary": task = "hot_topics_sentiment"
+                if task == "graph":   task = "relationship_network"
+                if task == "stats":   task = "corpus_statistics"
+
+                if task in stats_tasks:
+                    publish_task({"task_type": "insight_stats", "datasource": datasource,
+                                  "insight_type": task, "sample_hash": "manual_restart"})
+                elif task in ai_tasks:
                     publish_task({"task_type": "insight_ai", "datasource": datasource,
                                   "insight_type": task, "sample_hash": "manual_restart"})
-                elif task == "stats":
-                    publish_task({"task_type": "insight_stats", "datasource": datasource,
-                                  "sample_hash": "manual_restart"})
                 else:
-                    # Unknown insight type — fall back to coordinator
+                    # Fallback to coordinator if type is unknown or legacy
                     publish_task({"task_type": "insight_coordinator", "datasource": datasource})
                 return {"status": "restarted", "task": task, "category": category}, 200
 
@@ -1198,9 +1207,11 @@ def task_refresh_handler(app, operation, request, **kwargs):
             engine._set_task_status(datasource, task, "pending", sample_hash, clear_data=True)
 
             from src.worker.kafka_producer import publish_task
-            if task == "stats":
+            stats_tasks = ["corpus_statistics", "top_regions", "top_entities", "top_platforms"]
+            
+            if task in stats_tasks or task == "stats":
                 publish_task({"task_type": "insight_stats", "datasource": datasource,
-                              "sample_hash": sample_hash})
+                              "insight_type": task, "sample_hash": sample_hash})
             else:
                 publish_task({"task_type": "insight_ai", "datasource": datasource,
                               "insight_type": task, "sample_hash": sample_hash})
@@ -1219,6 +1230,59 @@ def dashboard_tasks_handler(app, operation, request, **kwargs):
             return data, 200
         except Exception as e:
             logger.error(f"[api] Error fetching dashboard tasks: {e}")
+            return {"error": str(e)}, 500
+
+
+def restart_active_tasks_handler(app, operation, request, **kwargs):
+    """POST /v1/tasks/restart-active — bulk restart all pending/processing tasks."""
+    from src.session.models import InsightsCache, DocumentEnrichment, get_db
+    from src.worker.kafka_producer import publish_task
+
+    with tracer.start_as_current_span("api.tasks.restart_active") as span:
+        try:
+            count = 0
+            with get_db() as db:
+                # 1. Insight tasks
+                insights = db.query(InsightsCache).filter(
+                    InsightsCache.status.in_(["pending", "processing"])
+                ).all()
+
+                stats_tasks = ["corpus_statistics", "top_regions", "top_entities", "top_platforms"]
+                for row in insights:
+                    ttype = row.insight_type
+                    if ttype in stats_tasks or ttype == "stats":
+                        publish_task({
+                            "task_type": "insight_stats",
+                            "datasource": row.datasource,
+                            "insight_type": ttype,
+                            "sample_hash": row.sample_hash
+                        })
+                    else:
+                        publish_task({
+                            "task_type": "insight_ai",
+                            "datasource": row.datasource,
+                            "insight_type": ttype,
+                            "sample_hash": row.sample_hash
+                        })
+                    count += 1
+
+                # 2. Enrichment tasks
+                enrichments = db.query(DocumentEnrichment).filter(
+                    DocumentEnrichment.status.in_(["pending", "processing"])
+                ).all()
+
+                for row in enrichments:
+                    publish_task({
+                        "task_type": "enrich_doc",
+                        "datasource": row.datasource,
+                        "doc_id": row.doc_id
+                    })
+                    count += 1
+
+            span.set_attribute("tasks.restarted_count", count)
+            return {"status": "ok", "restarted_count": count}, 200
+        except Exception as e:
+            logger.error(f"[api] Bulk restart failed: {e}", exc_info=True)
             return {"error": str(e)}, 500
 
 

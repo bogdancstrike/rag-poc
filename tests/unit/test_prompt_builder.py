@@ -119,13 +119,10 @@ class TestBuildInsightsMessages:
         # The user message content embeds the task-specific schema — should differ by type
         assert msgs_summary[0]["content"] != msgs_graph[0]["content"]
 
-    def test_graph_task_uses_smaller_input_budget(self, builder):
+    def test_all_ai_tasks_use_32k_cap(self, builder):
         # Create many large documents to exceed the 32k token budget
-        # but stay within the default context window budget.
-        # Approx 3.5 chars per token (Config.LLM_CHARS_PER_TOKEN)
-        # 32k tokens is ~112k chars.
-        # We explicitly set context window to 64k for this test to ensure
-        # summary budget (56k) > graph budget (32k).
+        # but stay within the default context window budget (64k).
+        # Both task types should be capped at 32k now.
         from src.config import Config
         old_ctx = Config.LLM_INSIGHTS_CTX
         Config.LLM_INSIGHTS_CTX = 65536
@@ -134,11 +131,19 @@ class TestBuildInsightsMessages:
             large_text = "A" * 5000
             docs = [{"id": f"d{i}", "text": large_text, "score": 1.0} for i in range(100)]
         
-            msgs_summary, _ = builder.build_insights_messages(docs, task_type="summary")
-            msgs_graph, _   = builder.build_insights_messages(docs, task_type="graph")
+            msgs_trend, _ = builder.build_insights_messages(docs, task_type="trending_signals")
+            msgs_graph, _ = builder.build_insights_messages(docs, task_type="relationship_network")
         
-            # Summary should have more content than graph because it has a larger budget
-            assert len(msgs_summary[0]["content"]) > len(msgs_graph[0]["content"])
+            # Both should have roughly the same amount of content (capped at 32k)
+            # The exact byte count might differ slightly due to schema/rules overhead
+            # but they should have the SAME number of documents packed.
+            def get_doc_count(content):
+                import re
+                match = re.search(r"=== INTELLIGENCE CORPUS \((\d+) documents\)", content)
+                return int(match.group(1)) if match else 0
+
+            assert get_doc_count(msgs_trend[0]["content"]) == get_doc_count(msgs_graph[0]["content"])
+            assert get_doc_count(msgs_trend[0]["content"]) < 100 # definitely capped
         finally:
             Config.LLM_INSIGHTS_CTX = old_ctx
 

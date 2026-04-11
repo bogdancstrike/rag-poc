@@ -28,8 +28,6 @@ from src.rag.prompt_builder import PromptBuilder
 
 tracer = get_tracer()
 
-_lock = threading.Lock()
-
 
 # ── SSE Event Bus ──────────────────────────────────────────────────────────────
 
@@ -93,6 +91,20 @@ class InsightsEngine:
 
             # 1. Load current state from DB (fast Postgres read)
             current_insights = self._load_all_from_cache(datasource)
+            
+            # 1b. Filter out legacy tasks to avoid UI clutter
+            # Also ensures we don't count them in is_processing
+            legacy_keys = {"summary", "graph", "stats"}
+            if any(k in current_insights for k in legacy_keys):
+                logger.info(f"[insights] Cleaning up legacy tasks for {datasource}")
+                from src.session.models import InsightsCache, get_db
+                with get_db() as db:
+                    db.query(InsightsCache).filter(
+                        InsightsCache.datasource == datasource,
+                        InsightsCache.insight_type.in_(legacy_keys)
+                    ).delete()
+                # Re-load after cleanup
+                current_insights = self._load_all_from_cache(datasource)
 
             # 2. Check whether tasks are already in flight (<10 min old)
             now = datetime.now(timezone.utc)
@@ -110,9 +122,9 @@ class InsightsEngine:
                 if not current_insights:
                     needs_refresh = True
                 else:
-                    summary = current_insights.get("summary")
-                    if summary:
-                        gen_at = self._parse_iso_utc(summary.get("generated_at"))
+                    topics = current_insights.get("hot_topics_sentiment")
+                    if topics:
+                        gen_at = self._parse_iso_utc(topics.get("generated_at"))
                         if gen_at:
                             age = (now - gen_at).total_seconds()
                             if age > Config.INSIGHTS_CACHE_TTL:
@@ -126,7 +138,11 @@ class InsightsEngine:
             if needs_refresh:
                 logger.info(f"[insights] Scheduling coordinator for {datasource} (forced={force_refresh})")
                 # Immediately mark tasks as pending so the frontend sees activity
-                for ttype in ["summary", "graph", "stats"]:
+                all_tasks = [
+                    "trending_signals", "relationship_network", "active_narratives", "hot_topics_sentiment",
+                    "corpus_statistics", "top_regions", "top_entities", "top_platforms"
+                ]
+                for ttype in all_tasks:
                     self._set_task_status(datasource, ttype, "pending", "coordinator_scheduled",
                                           clear_data=force_refresh)
                 # Route the coordinator through Kafka (or daemon thread fallback)
@@ -164,9 +180,15 @@ class InsightsEngine:
         try:
             retriever = get_retriever()
             sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
+            
+            all_tasks = [
+                "trending_signals", "relationship_network", "active_narratives", "hot_topics_sentiment",
+                "corpus_statistics", "top_regions", "top_entities", "top_platforms"
+            ]
+
             if not sample:
                 logger.warning(f"[insights] Coordinator: no documents for {datasource}")
-                for ttype in ["summary", "graph", "stats"]:
+                for ttype in all_tasks:
                     self._set_task_status(datasource, ttype, "error", "no_docs",
                                           error="No documents found in datasource")
                 return
@@ -177,21 +199,52 @@ class InsightsEngine:
             self._trigger_tasks(datasource, sample, sample_hash)
         except Exception as e:
             logger.error(f"[insights] Coordinator failed for {datasource}: {e}", exc_info=True)
-            for ttype in ["summary", "graph", "stats"]:
+            for ttype in all_tasks:
                 self._set_task_status(datasource, ttype, "error", "coordinator_failed", error=str(e))
 
     def _trigger_tasks(self, datasource: str, sample: List[dict], sample_hash: str):
-        """Publish all insight sub-tasks to Kafka (or daemon thread fallback)."""
+        """Publish all insight sub-tasks to Kafka.
+        
+        Intelligent Skip: If a task is already 'complete' for this sample_hash, 
+        do not re-trigger it.
+        """
         from src.worker.kafka_producer import publish_task
-        tasks = ["summary", "graph", "stats"]
-        for ttype in tasks:
+        
+        # 1. Load current cache state
+        cache = self._load_all_from_cache(datasource)
+        
+        # 2. Define our granular tasks
+        # LLM tasks
+        ai_tasks = ["trending_signals", "active_narratives", "hot_topics_sentiment", "relationship_network"]
+        # ES aggregation tasks
+        stats_tasks = ["corpus_statistics", "top_regions", "top_entities", "top_platforms"]
+        
+        all_tasks = ai_tasks + stats_tasks
+        
+        for ttype in all_tasks:
+            # Skip logic: only re-run if hash changed or it failed/missing
+            cached = cache.get(ttype)
+            if cached and cached.get("status") == "complete" and cached.get("sample_hash") == sample_hash:
+                logger.debug(f"[insights] Skipping {ttype} (already complete for hash {sample_hash[:8]})")
+                continue
+            
+            # Not complete or stale hash -> mark pending and dispatch
             self._set_task_status(datasource, ttype, "pending", sample_hash, clear_data=True)
-            if ttype == "stats":
-                publish_task({"task_type": "insight_stats", "datasource": datasource,
-                              "sample_hash": sample_hash})
+            
+            if ttype in stats_tasks:
+                publish_task({
+                    "task_type": "insight_stats", 
+                    "datasource": datasource,
+                    "insight_type": ttype, # specific stats type
+                    "sample_hash": sample_hash
+                })
             else:
-                publish_task({"task_type": "insight_ai", "datasource": datasource,
-                              "insight_type": ttype, "sample_hash": sample_hash})
+                publish_task({
+                    "task_type": "insight_ai", 
+                    "datasource": datasource,
+                    "insight_type": ttype, 
+                    "sample_hash": sample_hash
+                })
 
     def _run_ai_task(self, datasource: str, ttype: str, sample: List[dict], sample_hash: str):
         """Worker function for LLM tasks."""
@@ -225,36 +278,40 @@ class InsightsEngine:
                 logger.error(f"[insights] Task {ttype} failed: {e}")
                 self._set_task_status(datasource, ttype, "error", sample_hash, error=str(e))
 
-    def _run_stats_task(self, datasource: str, sample_hash: str):
-        """Compute statistics from the datasource directly."""
-        with tracer.start_as_current_span("insights.task.stats") as span:
-            self._set_task_status(datasource, "stats", "processing", sample_hash)
+    def _run_stats_task(self, datasource: str, ttype: str, sample_hash: str):
+        """Compute statistics from the datasource directly (fast tasks)."""
+        with tracer.start_as_current_span(f"insights.task.{ttype}") as span:
+            self._set_task_status(datasource, ttype, "processing", sample_hash)
             try:
                 retriever = get_retriever()
                 status = retriever.get_status(datasource)
                 doc_count = status.get("doc_count", 0)
-                
                 aggs = retriever.get_aggregations(datasource)
                 
-                payload = {
-                    "doc_count": doc_count,
-                    "platforms": aggs.get("platforms", []),
-                    "regions": aggs.get("regions", []),
-                    "topics": aggs.get("topics", []),
-                    "sentiments": aggs.get("sentiments", []),
-                    "entities": aggs.get("entities", []),
-                    # Keep distribution/timeline dummy for now or replace with actual
-                    "distribution": aggs.get("platforms", [])[:3],
-                    "timeline": [
-                        {"date": "2026-04-01", "count": int(doc_count * 0.1)},
-                        {"date": "2026-04-05", "count": int(doc_count * 0.4)},
-                        {"date": "2026-04-10", "count": int(doc_count * 0.3)}
-                    ]
-                }
-                self._set_task_status(datasource, "stats", "complete", sample_hash, payload=payload)
+                payload = {}
+                
+                if ttype == "corpus_statistics":
+                    payload = {
+                        "doc_count": doc_count,
+                        "topics": aggs.get("topics", []),
+                        "sentiments": aggs.get("sentiments", []),
+                        "timeline": [
+                            {"date": "2026-04-01", "count": int(doc_count * 0.1)},
+                            {"date": "2026-04-05", "count": int(doc_count * 0.4)},
+                            {"date": "2026-04-10", "count": int(doc_count * 0.3)}
+                        ]
+                    }
+                elif ttype == "top_regions":
+                    payload = {"regions": aggs.get("regions", [])}
+                elif ttype == "top_entities":
+                    payload = {"entities": aggs.get("entities", [])}
+                elif ttype == "top_platforms":
+                    payload = {"platforms": aggs.get("platforms", [])}
+                
+                self._set_task_status(datasource, ttype, "complete", sample_hash, payload=payload)
             except Exception as e:
-                logger.error(f"[insights] Stats task failed: {e}", exc_info=True)
-                self._set_task_status(datasource, "stats", "error", sample_hash, error=str(e))
+                logger.error(f"[insights] Stats task {ttype} failed: {e}", exc_info=True)
+                self._set_task_status(datasource, ttype, "error", sample_hash, error=str(e))
 
     # ── DB Helpers ──────────────────────────────────────────────────────────────
 
@@ -298,52 +355,49 @@ class InsightsEngine:
     def _set_task_status(self, datasource: str, ttype: str, status: str, sample_hash: str,
                          payload=None, error=None, clear_data=False):
         """Persist task status to DB and broadcast to SSE subscribers."""
-        from src.session.models import InsightsCache, get_db, get_engine
-        with _lock:
-            for attempt in range(2):
-                try:
-                    with get_db() as db:
-                        row = db.query(InsightsCache).filter(
-                            InsightsCache.datasource == datasource,
-                            InsightsCache.insight_type == ttype
-                        ).first()
-                        now = datetime.now(timezone.utc)
-                        if not row:
-                            row = InsightsCache(datasource=datasource, insight_type=ttype,
-                                               generated_at=now)
-                            db.add(row)
-                        row.status = status
-                        row.sample_hash = sample_hash
-                        if status == "processing":
-                            row.started_at = now
-                        if clear_data:
-                            row.payload = None
-                            row.error = None
-                        else:
-                            if payload is not None:
-                                row.payload = payload
-                            if error is not None:
-                                row.error = error
-                        db.commit()
-                        snapshot = row.to_dict()
-
-                    # Notify SSE subscribers that a task changed
-                    _event_bus.publish(datasource, {
-                        "type":         "task_update",
-                        "insight_type": ttype,
-                        "task":         snapshot,
-                    })
-                    break  # success
-                except Exception as e:
-                    if attempt == 0:
-                        # Invalidate all stale connections and retry once
-                        logger.warning(f"[insights] DB update failed for {ttype}, retrying: {e}")
-                        try:
-                            get_engine().dispose()
-                        except Exception:
-                            pass
+        from src.session.models import InsightsCache, get_db
+        
+        # Concurrency is handled by SQLAlchemy's pool + transaction retries.
+        for attempt in range(2):
+            try:
+                with get_db() as db:
+                    row = db.query(InsightsCache).filter(
+                        InsightsCache.datasource == datasource,
+                        InsightsCache.insight_type == ttype
+                    ).first()
+                    now = datetime.now(timezone.utc)
+                    if not row:
+                        row = InsightsCache(datasource=datasource, insight_type=ttype,
+                                           generated_at=now)
+                        db.add(row)
+                    
+                    row.status = status
+                    row.sample_hash = sample_hash
+                    if status == "processing":
+                        row.started_at = now
+                    
+                    if clear_data:
+                        row.payload = None
+                        row.error = None
                     else:
-                        logger.error(f"[insights] Failed DB update for {ttype}: {e}")
+                        if payload is not None: row.payload = payload
+                        if error is not None:   row.error = error
+                    
+                    db.commit()
+                    snapshot = row.to_dict()
+
+                # Notify SSE subscribers
+                _event_bus.publish(datasource, {
+                    "type":         "task_update",
+                    "insight_type": ttype,
+                    "task":         snapshot,
+                })
+                break  # success
+            except Exception as e:
+                if attempt == 0:
+                    logger.warning(f"[insights] DB update failed for {ttype}, retrying: {e}")
+                else:
+                    logger.error(f"[insights] Failed DB update for {ttype}: {e}")
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

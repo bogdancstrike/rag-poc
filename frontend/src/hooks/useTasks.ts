@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchTasks, fetchTask, restartTask, deleteTask, fetchTaskAnalytics, type TaskFilters, type TaskCategory } from '@/api/tasks'
+import { fetchTasks, fetchTask, restartTask, restartActiveTasks, deleteTask, fetchTaskAnalytics, type TaskFilters, type TaskCategory } from '@/api/tasks'
 
 const TASKS_KEY = 'tasks'
 
@@ -39,6 +39,16 @@ export function useRestartTask() {
       datasource: string
       task: string
     }) => restartTask(category, datasource, task),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [TASKS_KEY] })
+    },
+  })
+}
+
+export function useRestartActiveTasks() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: restartActiveTasks,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [TASKS_KEY] })
     },

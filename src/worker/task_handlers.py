@@ -44,35 +44,61 @@ def dispatch_task(task: dict) -> None:
 def handle_insight_coordinator(task: dict) -> None:
     """Fetch ES sample, compute hash, fan-out sub-tasks."""
     datasource = task["datasource"]
+    all_tasks = [
+        "trending_signals", "relationship_network", "active_narratives", "hot_topics_sentiment",
+        "corpus_statistics", "top_regions", "top_entities", "top_platforms"
+    ]
     try:
         from src.rag.retriever import get_retriever
         from src.rag.insights_engine import get_insights_engine
         from src.worker.kafka_producer import publish_task
 
         retriever = get_retriever()
+        
+        # Check if index exists and has docs
+        stats = retriever.get_status(datasource)
+        if stats.get("status") == "missing":
+            logger.warning(f"[worker] Datasource missing: {datasource}")
+            engine = get_insights_engine()
+            for t in all_tasks:
+                engine._set_task_status(datasource, t, "error", "missing_index",
+                                        error=f"Datasource '{datasource}' not found in Elasticsearch.")
+            return
+
         sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
         if not sample:
             logger.warning(f"[worker] No docs for coordinator: {datasource}")
             engine = get_insights_engine()
-            for t in ("summary", "graph", "stats"):
+            for t in all_tasks:
                 engine._set_task_status(datasource, t, "error", "no_docs",
-                                        error="No documents found in datasource")
+                                        error="No documents found in datasource.")
             return
 
         doc_ids = sorted(str(d.get("id", "")) for d in sample)
         sample_hash = hashlib.sha256(",".join(doc_ids).encode()).hexdigest()
         logger.info(f"[worker] Coordinator: {len(sample)} docs hash={sample_hash[:8]} ds={datasource}")
 
-        publish_task({"task_type": "insight_stats", "datasource": datasource, "sample_hash": sample_hash})
-        for insight_type in ("summary", "graph"):
+        # Fan out all granular tasks
+        ai_tasks = ["trending_signals", "relationship_network", "active_narratives", "hot_topics_sentiment"]
+        stats_tasks = ["corpus_statistics", "top_regions", "top_entities", "top_platforms"]
+
+        for t in stats_tasks:
+            publish_task({"task_type": "insight_stats", "datasource": datasource,
+                          "insight_type": t, "sample_hash": sample_hash})
+        for t in ai_tasks:
             publish_task({"task_type": "insight_ai", "datasource": datasource,
-                          "insight_type": insight_type, "sample_hash": sample_hash})
+                          "insight_type": t, "sample_hash": sample_hash})
+            
     except Exception as e:
         logger.error(f"[worker] Coordinator failed ds={datasource}: {e}", exc_info=True)
+        from src.rag.insights_engine import get_insights_engine
+        engine = get_insights_engine()
+        for t in all_tasks:
+            engine._set_task_status(datasource, t, "error", "coordinator_failed", error=str(e))
 
 
 def handle_insight_ai(task: dict) -> None:
-    """Run LLM for one insight type (summary / graph)."""
+    """Run LLM for one insight type."""
     datasource = task["datasource"]
     insight_type = task["insight_type"]
     sample_hash = task.get("sample_hash", "unknown")
@@ -87,10 +113,14 @@ def handle_insight_ai(task: dict) -> None:
 
 
 def handle_insight_stats(task: dict) -> None:
-    """Run Elasticsearch aggregations for the stats insight."""
+    """Run Elasticsearch aggregations for one stats type."""
+    datasource = task["datasource"]
+    insight_type = task["insight_type"]
+    sample_hash = task.get("sample_hash", "unknown")
+    
     from src.rag.insights_engine import get_insights_engine
     engine = get_insights_engine()
-    engine._run_stats_task(task["datasource"], task.get("sample_hash", "unknown"))
+    engine._run_stats_task(datasource, insight_type, sample_hash)
 
 
 # ── Document enrichment tasks ──────────────────────────────────────────────────
