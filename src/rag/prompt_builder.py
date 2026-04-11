@@ -4,6 +4,7 @@ Builds the system prompt and the messages list that gets sent to the LLM.
 Retrieved document chunks are embedded as XML-tagged blocks so the model
 can cite them precisely.
 """
+from framework.commons.logger import logger
 from src.config import Config
 
 
@@ -21,20 +22,26 @@ STRICT RULES:
 6. Never invent document IDs or cite documents not in the provided context.
 """
 
-INSIGHTS_SUMMARY_PROMPT = """You are a specialized intelligence extraction engine.
-Analyse the provided documents and output structured insights.
+INSIGHTS_SUMMARY_SCHEMA = """{
+  "hot_topics": [
+    {"topic": "string", "count_estimate": 0, "summary": "string", "sentiment": "positive|negative|neutral"}
+  ],
+  "narratives": [
+    {"title": "string", "description": "string", "evidence_docs": ["doc_title_or_keyword"]}
+  ],
+  "trends": [
+    {"label": "string", "direction": "rising|falling|stable", "change_pct": 0.0, "time_period": "string"}
+  ]
+}"""
 
-FORMAT RULES:
-1. Output ONLY valid JSON.
-2. The JSON must have EXACTLY this structure:
-{
-  "hot_topics": [{"topic": "string", "count_estimate": int, "summary": "string", "sentiment": "positive|negative|neutral"}],
-  "narratives": [{"title": "string", "description": "string", "evidence_docs": ["doc_title_or_keyword"]}],
-  "trends": [{"label": "string", "direction": "rising|falling|stable", "change_pct": float, "time_period": "string"}]
-}
-3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
-4. Return UP TO 10 hot_topics (most significant first), UP TO 5 narratives (most impactful first), UP TO 10 trends.
-"""
+INSIGHTS_SUMMARY_RULES = """Rules:
+- hot_topics: up to 10, most significant first.
+- narratives: up to 5, most impactful first.
+- trends: up to 10, based on frequency/recency patterns in the corpus.
+- Do NOT add any keys beyond hot_topics, narratives, trends."""
+
+# Keep old name as alias so any other caller still works
+INSIGHTS_SUMMARY_PROMPT = INSIGHTS_SUMMARY_SCHEMA
 
 INSIGHTS_NER_PROMPT = """Extract named entities from the provided documents.
 FORMAT RULES:
@@ -140,6 +147,24 @@ FORMAT RULES:
 8. "weight" reflects relationship strength (0.1–1.0) based on how explicitly and frequently the relationship is described in the documents: use higher weights for edges within the same community and for relationships stated multiple times or in strong terms.
 9. Do NOT include any other top-level keys. Do NOT emit the Phase 1 NER list separately — it is an internal step; only the final graph JSON is returned.
 """
+
+INSIGHTS_GRAPH_SCHEMA = """{
+  "nodes": [
+    {"id": "EntityName", "label": "EntityName", "type": "person|org|gpe|loc|date|money|event|product|norp|law|fac", "community": 0}
+  ],
+  "edges": [
+    {"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}
+  ]
+}"""
+
+INSIGHTS_GRAPH_RULES = """Rules (read INSIGHTS_GRAPH_PROMPT for full NER+graph instructions):
+- Extract named entities (people, orgs, locations, events, products, dates…) from the corpus.
+- Build a community knowledge graph: nodes = entities, edges = relationships stated in the text.
+- 20–50 nodes, 40–100 edges (only if the corpus supports it — do not pad with invented data).
+- Every node must have at least 2 edges. Every edge must match a relationship from the text.
+- "source" and "target" must match node "id" values exactly.
+- Assign community integers (0-based) grouping nodes that share a theme/actor/storyline.
+- Do NOT add any keys beyond nodes and edges."""
 
 # ── Per-field enrichment prompts ───────────────────────────────────────────────
 
@@ -289,43 +314,111 @@ class PromptBuilder:
     def build_insights_messages(self, sample_docs: list[dict], task_type: str = "summary") -> tuple[list[dict], str]:
         """Build the messages list for the insights generation call.
 
-        Sends lightweight one-line entries (title + topic + sentiment + 120-char
-        snippet) instead of full text so that up to 500 documents fit within the
-        LLM context window while still giving the model the breadth of the corpus.
+        Packs as many documents as possible into the configured context window,
+        sending full document text for each one rather than tiny snippets.
+
+        Budget calculation
+        ------------------
+        available_chars = LLM_INSIGHTS_CTX × LLM_CHARS_PER_TOKEN
+                          − LLM_INSIGHTS_RESERVE_CHARS
+
+        Documents are packed greedily in sample order: each document gets its
+        full text up to the remaining budget. When the budget is exhausted the
+        loop stops, so later documents are silently dropped rather than all
+        documents getting tiny truncated snippets.
+
+        For a 64 k-token context (≈ 224 k chars) and an 10 k-char reserve:
+          · ~214 k chars available for document content
+          · A 500-char doc → ~428 full-text documents fit
+          · A 2 000-char doc → ~107 full-text documents fit
+        Either way this is dramatically better than 40 docs × 120-char snippets.
         """
-        docs = sample_docs[:Config.INSIGHTS_MAX_DOCS]
-
-        def _fmt(doc: dict) -> str:
-            title     = (doc.get("title") or "").strip()[:80]
-            topic     = doc.get("topic", "")
-            sentiment = doc.get("sentiment", "")
-            snippet   = (doc.get("text") or "").strip()[:120].replace("\n", " ")
-            parts = []
-            if title:     parts.append(f"title={title!r}")
-            if topic:     parts.append(f"topic={topic!r}")
-            if sentiment: parts.append(f"sentiment={sentiment!r}")
-            if snippet:   parts.append(f"snippet={snippet!r}")
-            return f"[{', '.join(parts)}]"
-
-        doc_lines = "\n".join(_fmt(d) for d in docs)
-
         prompt_map = {
             "summary": INSIGHTS_SUMMARY_PROMPT,
             "graph":   INSIGHTS_GRAPH_PROMPT,
         }
         system_prompt = prompt_map.get(task_type, INSIGHTS_SUMMARY_PROMPT)
 
-        messages = [{
-            "role": "user",
-            "content": (
-                f"Analyse ALL {len(docs)} documents below and output structured JSON for {task_type}.\n"
-                f"Return ONLY a valid JSON object matching this schema exactly:\n\n"
-                f"{system_prompt}\n\n"
-                f"=== CORPUS ({len(docs)} documents) ===\n{doc_lines}"
-            ),
-        }]
+        # ── Budget ─────────────────────────────────────────────────────────────
+        total_ctx_chars = int(Config.LLM_INSIGHTS_CTX * Config.LLM_CHARS_PER_TOKEN)
+        available_chars = total_ctx_chars - Config.LLM_INSIGHTS_RESERVE_CHARS
 
-        return messages, "You are a specialized JSON extraction engine. Output ONLY valid JSON."
+        doc_lines   = []
+        used_chars  = 0
+
+        for doc in sample_docs:
+            title     = (doc.get("title") or "").strip()[:120]
+            topic     = (doc.get("topic")  or "").strip()
+            sentiment = (doc.get("sentiment") or "").strip()
+            text      = (doc.get("text") or "").strip()
+
+            # Fixed metadata portion (always included)
+            meta_parts: list[str] = []
+            if title:     meta_parts.append(f"title={title!r}")
+            if topic:     meta_parts.append(f"topic={topic!r}")
+            if sentiment: meta_parts.append(f"sentiment={sentiment!r}")
+
+            meta_str   = ", ".join(meta_parts)
+            # Estimate chars consumed by this doc before adding text
+            overhead   = len(meta_str) + 6   # "[", "]", ", text=''", newline
+
+            remaining_for_text = available_chars - used_chars - overhead
+            if remaining_for_text <= 0:
+                break   # No budget left for even the metadata of this doc
+
+            # Pack as much text as fits
+            if text and remaining_for_text > 40:
+                if len(text) <= remaining_for_text:
+                    meta_parts.append(f"text={text!r}")
+                else:
+                    # Truncate text to fit; mark truncation with ellipsis
+                    trimmed = text[:remaining_for_text - 1].rstrip()
+                    meta_parts.append(f"text={trimmed!r}…")
+
+            line = f"[{', '.join(meta_parts)}]"
+            doc_lines.append(line)
+            used_chars += len(line) + 1   # +1 for the trailing newline
+
+        n = len(doc_lines)
+        approx_tokens = int(used_chars / Config.LLM_CHARS_PER_TOKEN)
+        logger.info(
+            f"[insights] {task_type}: packed {n}/{len(sample_docs)} docs "
+            f"({used_chars:,} chars ≈ {approx_tokens:,} tokens) "
+            f"into {Config.LLM_INSIGHTS_CTX:,}-token context"
+        )
+
+        # Select the schema + rules that go AFTER the corpus
+        if task_type == "graph":
+            schema = INSIGHTS_GRAPH_SCHEMA
+            rules  = INSIGHTS_GRAPH_RULES
+        else:
+            schema = INSIGHTS_SUMMARY_SCHEMA
+            rules  = INSIGHTS_SUMMARY_RULES
+
+        doc_block = "\n".join(doc_lines)
+
+        # ── Corpus-first layout ────────────────────────────────────────────────
+        # The schema appears AFTER the documents so the model's last instruction
+        # before generating is the output format — not a schema it read hundreds
+        # of documents ago and has since forgotten.
+        content = (
+            f"=== INTELLIGENCE CORPUS ({n} documents) ===\n"
+            f"{doc_block}\n"
+            f"=== END CORPUS ===\n\n"
+            f"Analyse the {n} documents above and extract structured intelligence.\n\n"
+            f"{rules}\n\n"
+            f"Output ONLY the following JSON structure — no extra keys, no explanation, "
+            f"no markdown fences. Start immediately with '{{':\n"
+            f"{schema}"
+        )
+
+        messages = [{"role": "user", "content": content}]
+        system   = (
+            "You are a specialized intelligence extraction engine. "
+            "Output ONLY valid JSON that exactly matches the requested schema. "
+            "Do not output any text before or after the JSON object."
+        )
+        return messages, system
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

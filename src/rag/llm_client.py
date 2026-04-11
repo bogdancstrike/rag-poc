@@ -112,40 +112,42 @@ class LLMClient:
 
     # ── JSON structured output ──────────────────────────────────────────────────
 
-    def complete_json(self, messages: list[dict], system: str = "") -> str:
+    def complete_json(
+        self,
+        messages: list[dict],
+        system: str = "",
+        num_ctx: int | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         """Request a JSON response. Returns raw string — caller parses it.
 
-        Ollama respects the response_format param for models that support it.
-        We ensure the system prompt is focused on JSON output.
-
-        For Qwen3-series models: thinking mode is suppressed via both the
-        /no_think system-prompt token (model-level, always works) and the
-        options.think=false Ollama parameter (API-level, requires Ollama ≥0.6).
+        Args:
+            num_ctx:    Ollama context window override. Pass Config.LLM_INSIGHTS_CTX
+                        for intelligence generation; leave None for enrichment tasks
+                        (defaults to 8 192, which is plenty for a single document).
+            max_tokens: Output token limit override. Defaults to LLM_JSON_MAX_TOKENS.
         """
-        # /no_think suppresses the Qwen3 reasoning chain at the model level.
-        # Only append it for Qwen3 models — Qwen2.5 has no thinking mode and the
-        # token confuses it, causing empty {} responses.
         if "qwen3" in self._model.lower():
             system = (system.rstrip() + "\n/no_think") if system else "/no_think"
         full_messages = self._build_messages(messages, system)
+        ctx       = num_ctx    or 8192                    # small default for enrichment
+        out_limit = max_tokens or Config.LLM_JSON_MAX_TOKENS
         with tracer.start_as_current_span("llm.complete_json") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
+            span.set_attribute("llm.num_ctx", ctx)
+            span.set_attribute("llm.max_tokens", out_limit)
             try:
                 resp = self._client.chat.completions.create(
                     model=self._model,
                     messages=full_messages,
-                    max_tokens=Config.LLM_JSON_MAX_TOKENS,
+                    max_tokens=out_limit,
                     temperature=0.0,
                     stream=False,
                     response_format={"type": "json_object"},
-                    # num_ctx=8192 is plenty for enrichment prompts + JSON output
-                    # and is much faster than 16K on small models.
-                    extra_body={"options": {"num_ctx": 8192}},
+                    extra_body={"options": {"num_ctx": ctx}},
                 )
                 content = resp.choices[0].message.content or "{}"
-                # Strip any residual <think>...</think> blocks (Qwen3 / reasoning
-                # models may still emit them depending on Ollama version).
                 content = _strip_think_blocks(content)
                 span.set_attribute("llm.response_length", len(content))
                 return content

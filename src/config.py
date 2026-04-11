@@ -31,11 +31,26 @@ class Config:
     LLM_BASE_URL    = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
     LLM_MODEL       = os.getenv("LLM_MODEL", "qwen3.5:9b")
     LLM_MAX_TOKENS  = int(os.getenv("LLM_MAX_TOKENS", "4096"))
-    LLM_JSON_MAX_TOKENS = int(os.getenv("LLM_JSON_MAX_TOKENS", "16384"))
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     # Hard wall-clock timeout for a single LLM API call (seconds).
     # Ollama can hang indefinitely on model load or OOM — this unblocks the worker.
     LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "300"))
+
+    # ── Intelligence Report LLM settings ───────────────────────────────────────
+    # Ollama num_ctx (context window) used exclusively for insight generation.
+    # Larger = more documents analysed per run. Default 65536 (64 k tokens).
+    LLM_INSIGHTS_CTX        = int(os.getenv("LLM_INSIGHTS_CTX", "65536"))
+    # Max output tokens for the insights JSON response (graph + summary can be large).
+    LLM_INSIGHTS_MAX_TOKENS = int(os.getenv("LLM_INSIGHTS_MAX_TOKENS", "65536"))
+    # Conservative chars-per-token estimate used to convert token budget → char budget.
+    # 3.5 is safe for mixed English/non-English intelligence text.
+    LLM_CHARS_PER_TOKEN     = float(os.getenv("LLM_CHARS_PER_TOKEN", "3.5"))
+    # Characters reserved for prompts, JSON schema instructions, and LLM output space.
+    # The remainder (ctx_chars - reserve) is available for document content.
+    LLM_INSIGHTS_RESERVE_CHARS = int(os.getenv("LLM_INSIGHTS_RESERVE_CHARS", "10000"))
+
+    # Enrichment (per-document) JSON context — smaller is fine, only one doc at a time.
+    LLM_JSON_MAX_TOKENS = int(os.getenv("LLM_JSON_MAX_TOKENS", "16384"))
 
     # Candidate pool fetched from ES before relevance filtering.
     # Larger pool = better chance of finding truly relevant docs.
@@ -52,10 +67,11 @@ class Config:
 
     # ── Insights ───────────────────────────────────────────────────────────────
     INSIGHTS_CACHE_TTL = int(os.getenv("INSIGHTS_CACHE_TTL", "1800"))  # seconds
-    # How many docs to sample for AI analysis. Titles+topics only are sent to the
-    # LLM so a large sample fits comfortably within the context window.
-    INSIGHTS_MAX_DOCS  = int(os.getenv("INSIGHTS_MAX_DOCS", "500"))
-    # Hard cap used only when full text is needed (enrichment etc.)
+    # Candidate pool sampled from the index before budget-aware packing.
+    # The prompt builder will pack as many as fit within LLM_INSIGHTS_CTX;
+    # extras are silently dropped. Larger pool = more representative sample.
+    INSIGHTS_MAX_DOCS  = int(os.getenv("INSIGHTS_MAX_DOCS", "2000"))
+    # Hard cap for per-document enrichment (full-text, single doc at a time).
     INSIGHTS_MAX_DOCS_FULL_TEXT = int(os.getenv("INSIGHTS_MAX_DOCS_FULL_TEXT", "40"))
 
     # ── Kafka / Worker (required by QF framework at import time — unused for RAG) ──
