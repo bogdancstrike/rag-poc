@@ -381,9 +381,11 @@ class PromptBuilder:
 
         n = len(doc_lines)
         approx_tokens = int(used_chars / Config.LLM_CHARS_PER_TOKEN)
+        total_words = sum(len(doc.get("text", "").split()) for doc in sample_docs)
+
         logger.info(
             f"[insights] {task_type}: packed {n}/{len(sample_docs)} docs "
-            f"({used_chars:,} chars ≈ {approx_tokens:,} tokens) "
+            f"({used_chars:,} chars ≈ {approx_tokens:,} tokens, {total_words:,} words) "
             f"into {Config.LLM_INSIGHTS_CTX:,}-token context"
         )
 
