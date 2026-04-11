@@ -86,10 +86,14 @@ class ESClient:
     _MAX_QUERY_LEN = 512
 
     def _keyword_search(self, query: str, top_k: int, index_name: str) -> list[dict]:
-        """Standard multi-field BM25 search across text-like fields."""
-        # Truncate long queries (e.g. user pasted a full document into chat).
-        # Fuzziness is intentionally omitted: it amplifies clause-count on long
-        # inputs and is not useful for intelligence document retrieval.
+        """Multi-field BM25 search with phrase-match boosting.
+
+        Uses a bool/should query so that:
+        - Any term match scores the document (permissive retrieval)
+        - Exact phrase matches receive a large relevance boost (better ranking)
+        - minimum_should_match on the inner multi_match requires at least 30%
+          of query terms to appear, filtering out near-zero-relevance hits
+        """
         q = query[:self._MAX_QUERY_LEN]
         try:
             resp = self._client.search(
@@ -97,10 +101,28 @@ class ESClient:
                 body={
                     "size": top_k,
                     "query": {
-                        "multi_match": {
-                            "query":  q,
-                            "fields": ["text^3", "title^2", "content^2", "*"],
-                            "type":   "best_fields",
+                        "bool": {
+                            "should": [
+                                {
+                                    "multi_match": {
+                                        "query":                 q,
+                                        "fields":               ["text^2", "title^4", "content^2"],
+                                        "type":                 "best_fields",
+                                        "minimum_should_match": "30%",
+                                    }
+                                },
+                                # Phrase match gives a strong boost when the exact
+                                # phrase appears — helps surface the most relevant docs.
+                                {
+                                    "multi_match": {
+                                        "query":  q,
+                                        "fields": ["text^2", "title^4"],
+                                        "type":   "phrase",
+                                        "boost":  3.0,
+                                    }
+                                },
+                            ],
+                            "minimum_should_match": 1,
                         }
                     },
                     "_source": True,
@@ -109,14 +131,37 @@ class ESClient:
             return self._normalise_hits(resp["hits"]["hits"])
         except Exception as e:
             logger.error(f"[es] keyword search error: {e}")
-            return []
+            # Fallback to simpler query on error (e.g. phrase match failed on short text)
+            try:
+                resp = self._client.search(
+                    index=index_name,
+                    body={
+                        "size": top_k,
+                        "query": {
+                            "multi_match": {
+                                "query":  q[:256],
+                                "fields": ["text^2", "title^4", "*"],
+                                "type":   "best_fields",
+                            }
+                        },
+                        "_source": True,
+                    },
+                )
+                return self._normalise_hits(resp["hits"]["hits"])
+            except Exception as e2:
+                logger.error(f"[es] fallback keyword search error: {e2}")
+                return []
 
     def _hybrid_search(self, query: str, top_k: int, index_name: str) -> list[dict]:
         """BM25 search only (KNN requires embeddings generation pipeline)."""
         return self._keyword_search(query, top_k, index_name)
 
     def _normalise_hits(self, hits: list) -> list[dict]:
-        """Convert raw ES hits to the common {id, text, score, source, metadata} shape."""
+        """Convert raw ES hits to the common {id, title, text, score, source, metadata} shape.
+
+        `title` is promoted to the top level so downstream code (prompt builder,
+        source formatter) doesn't need to dig into metadata.
+        """
         results = []
         for hit in hits:
             src  = hit.get("_source", {})
@@ -127,12 +172,20 @@ class ESClient:
                 or src.get("description")
                 or str(src)[:500]
             )
+            title = (
+                src.get("title")
+                or src.get("topic")
+                or src.get("name")
+                or ""
+            )
+            metadata = {k: v for k, v in src.items() if k not in ("text", "content", "body")}
             results.append({
                 "id":       hit["_id"],
+                "title":    title,
                 "text":     text,
                 "score":    round(hit.get("_score", 0.0), 4),
                 "source":   "elasticsearch",
-                "metadata": {k: v for k, v in src.items() if k not in ("text", "content", "body")},
+                "metadata": metadata,
             })
         return results
 

@@ -143,26 +143,37 @@ def liveness(app, operation, request, **kwargs):
 # ── Chat helpers ───────────────────────────────────────────────────────────────
 
 def _filter_chunks(chunks: list[dict]) -> list[dict]:
-    """Apply dynamic score threshold to retrieved chunks.
+    """Adaptive relevance filtering using relative score normalisation.
 
     Strategy:
-    1. Drop any chunk whose score is below RAG_SCORE_THRESHOLD.
-    2. If ALL chunks are below the threshold (e.g. very poor retrieval), keep
-       the top RAG_MAX_CONTEXT_CHUNKS as a fallback so the LLM always has
-       something to work with.
-    3. Cap the final set at RAG_MAX_CONTEXT_CHUNKS.
+    1. Normalise all BM25 scores against the top result (top result = 1.0).
+       This makes the threshold query-agnostic — BM25 raw scores vary wildly
+       (0.1 to 30+) depending on term frequency, so an absolute floor is useless.
+    2. Keep chunks whose normalised score >= RAG_RELATIVE_THRESHOLD (default 0.35).
+       This means: keep a doc only if it's at least 35% as relevant as the best match.
+    3. Fallback: if every doc passes or fails identically (flat score distribution,
+       no useful signal), return the top RAG_MAX_CONTEXT_CHUNKS unchanged.
+    4. Hard cap at RAG_MAX_CONTEXT_CHUNKS — fewer, highly-relevant chunks produce
+       better LLM answers than many marginally-relevant ones.
     """
-    threshold = Config.RAG_SCORE_THRESHOLD
-    max_k     = Config.RAG_MAX_CONTEXT_CHUNKS
-
     if not chunks:
         return []
 
-    filtered = [c for c in chunks if (c.get("score") or 0) >= threshold]
+    max_k     = Config.RAG_MAX_CONTEXT_CHUNKS
+    rel_thr   = Config.RAG_RELATIVE_THRESHOLD
+    max_score = max((c.get("score") or 0) for c in chunks)
 
-    # Fallback: if filtering removed everything, keep the best ones anyway
+    if max_score <= 0:
+        return chunks[:max_k]
+
+    # Normalise scores; scores become relative to the best match
+    normalised = [{**c, "score": round((c.get("score") or 0) / max_score, 4)} for c in chunks]
+
+    filtered = [c for c in normalised if c["score"] >= rel_thr]
+
+    # Fallback: flat distribution (e.g. all docs score ~equally) → return top-k
     if not filtered:
-        filtered = sorted(chunks, key=lambda c: c.get("score", 0), reverse=True)
+        filtered = normalised
 
     return filtered[:max_k]
 
@@ -170,19 +181,37 @@ def _filter_chunks(chunks: list[dict]) -> list[dict]:
 def _format_sources(chunks: list[dict], datasource: str) -> list[dict]:
     """Serialise retrieved chunks to the sources list stored with each message.
 
-    Returns full doc id, score, short text preview, datasource, and title so
-    the frontend can build a "Go To Document" link.
+    Scores at this point are already normalised to [0, 1] by _filter_chunks,
+    so 1.0 = best match for this query, 0.35+ = kept by the relevance filter.
     """
-    return [
-        {
-            "id":         c.get("id", ""),
-            "score":      round(c.get("score", 0), 4),
-            "text":       (c.get("text") or "")[:300],
-            "title":      c.get("title") or c.get("source") or "",
-            "datasource": datasource,
-        }
-        for c in chunks
-    ]
+    sources = []
+    for c in chunks:
+        meta  = c.get("metadata") or {}
+        title = (
+            c.get("title")
+            or meta.get("title")
+            or meta.get("topic")
+            or meta.get("name")
+            or ""
+        )
+        date  = (
+            meta.get("date")
+            or meta.get("created_at")
+            or meta.get("published_at")
+            or meta.get("timestamp")
+            or ""
+        )
+        sources.append({
+            "id":           c.get("id", ""),
+            "score":        round(c.get("score", 0), 4),
+            "text":         (c.get("text") or "")[:400],
+            "title":        title,
+            "date":         str(date)[:10] if date else "",
+            "datasource":   datasource,
+            "classification": meta.get("classification") or "",
+            "sentiment":      meta.get("sentiment") or "",
+        })
+    return sources
 
 
 # ── Chat (sync) ────────────────────────────────────────────────────────────────

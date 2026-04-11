@@ -37,13 +37,16 @@ class Config:
     # Ollama can hang indefinitely on model load or OOM — this unblocks the worker.
     LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "300"))
 
-    # Number of document chunks to retrieve per query (upper bound)
-    RAG_TOP_K = int(os.getenv("RAG_TOP_K", "20"))
-    # Minimum relevance score — chunks below this threshold are discarded.
-    # Set to 0.0 to disable filtering (keep all retrieved chunks).
-    RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.15"))
-    # Max chunks passed to the LLM after score filtering
-    RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "20"))
+    # Candidate pool fetched from ES before relevance filtering.
+    # Larger pool = better chance of finding truly relevant docs.
+    RAG_TOP_K = int(os.getenv("RAG_TOP_K", "50"))
+    # Relative relevance threshold: keep a doc only if its BM25 score is at
+    # least this fraction of the top-scoring result (0.35 = 35%).
+    # Adapts automatically to query difficulty — no fixed absolute floor needed.
+    RAG_RELATIVE_THRESHOLD = float(os.getenv("RAG_RELATIVE_THRESHOLD", "0.35"))
+    # Hard cap on chunks passed to the LLM. Fewer, highly-relevant chunks
+    # produce better answers than many marginally-relevant ones.
+    RAG_MAX_CONTEXT_CHUNKS = int(os.getenv("RAG_MAX_CONTEXT_CHUNKS", "8"))
     # Max conversation history turns injected into prompt
     HISTORY_TURNS = int(os.getenv("HISTORY_TURNS", "10"))
 
