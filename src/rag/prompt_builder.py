@@ -311,6 +311,117 @@ class PromptBuilder:
 
     # ── Insights prompt ─────────────────────────────────────────────────────────
 
+    # def build_insights_messages(self, sample_docs: list[dict], task_type: str = "summary") -> tuple[list[dict], str]:
+    #     """Build the messages list for the insights generation call.
+    #
+    #     Packs as many documents as possible into the configured context window,
+    #     sending full document text for each one rather than tiny snippets.
+    #
+    #     Budget calculation
+    #     ------------------
+    #     available_chars = LLM_INSIGHTS_CTX × LLM_CHARS_PER_TOKEN
+    #                       − LLM_INSIGHTS_RESERVE_CHARS
+    #
+    #     Documents are packed greedily in sample order: each document gets its
+    #     full text up to the remaining budget. When the budget is exhausted the
+    #     loop stops, so later documents are silently dropped rather than all
+    #     documents getting tiny truncated snippets.
+    #
+    #     For a 64 k-token context (≈ 224 k chars) and an 10 k-char reserve:
+    #       · ~214 k chars available for document content
+    #       · A 500-char doc → ~428 full-text documents fit
+    #       · A 2 000-char doc → ~107 full-text documents fit
+    #     Either way this is dramatically better than 40 docs × 120-char snippets.
+    #     """
+    #     prompt_map = {
+    #         "summary": INSIGHTS_SUMMARY_PROMPT,
+    #         "graph":   INSIGHTS_GRAPH_PROMPT,
+    #     }
+    #     system_prompt = prompt_map.get(task_type, INSIGHTS_SUMMARY_PROMPT)
+    #
+    #     # ── Budget ─────────────────────────────────────────────────────────────
+    #     total_ctx_chars = int(Config.LLM_INSIGHTS_CTX * Config.LLM_CHARS_PER_TOKEN)
+    #     available_chars = total_ctx_chars - Config.LLM_INSIGHTS_RESERVE_CHARS
+    #
+    #     doc_lines   = []
+    #     used_chars  = 0
+    #
+    #     for doc in sample_docs:
+    #         title     = (doc.get("title") or "").strip()[:120]
+    #         topic     = (doc.get("topic")  or "").strip()
+    #         sentiment = (doc.get("sentiment") or "").strip()
+    #         text      = (doc.get("text") or "").strip()
+    #
+    #         # Fixed metadata portion (always included)
+    #         meta_parts: list[str] = []
+    #         if title:     meta_parts.append(f"title={title!r}")
+    #         if topic:     meta_parts.append(f"topic={topic!r}")
+    #         if sentiment: meta_parts.append(f"sentiment={sentiment!r}")
+    #
+    #         meta_str   = ", ".join(meta_parts)
+    #         # Estimate chars consumed by this doc before adding text
+    #         overhead   = len(meta_str) + 6   # "[", "]", ", text=''", newline
+    #
+    #         remaining_for_text = available_chars - used_chars - overhead
+    #         if remaining_for_text <= 0:
+    #             break   # No budget left for even the metadata of this doc
+    #
+    #         # Pack as much text as fits
+    #         if text and remaining_for_text > 40:
+    #             if len(text) <= remaining_for_text:
+    #                 meta_parts.append(f"text={text!r}")
+    #             else:
+    #                 # Truncate text to fit; mark truncation with ellipsis
+    #                 trimmed = text[:remaining_for_text - 1].rstrip()
+    #                 meta_parts.append(f"text={trimmed!r}…")
+    #
+    #         line = f"[{', '.join(meta_parts)}]"
+    #         doc_lines.append(line)
+    #         used_chars += len(line) + 1   # +1 for the trailing newline
+    #
+    #     n = len(doc_lines)
+    #     approx_tokens = int(used_chars / Config.LLM_CHARS_PER_TOKEN)
+    #     total_words = sum(len(doc.get("text", "").split()) for doc in sample_docs)
+    #
+    #     logger.info(
+    #         f"[insights] {task_type}: packed {n}/{len(sample_docs)} docs "
+    #         f"({used_chars:,} chars ≈ {approx_tokens:,} tokens, {total_words:,} words) "
+    #         f"into {Config.LLM_INSIGHTS_CTX:,}-token context"
+    #     )
+    #
+    #     # Select the schema + rules that go AFTER the corpus
+    #     if task_type == "graph":
+    #         schema = INSIGHTS_GRAPH_SCHEMA
+    #         rules  = INSIGHTS_GRAPH_RULES
+    #     else:
+    #         schema = INSIGHTS_SUMMARY_SCHEMA
+    #         rules  = INSIGHTS_SUMMARY_RULES
+    #
+    #     doc_block = "\n".join(doc_lines)
+    #
+    #     # ── Corpus-first layout ────────────────────────────────────────────────
+    #     # The schema appears AFTER the documents so the model's last instruction
+    #     # before generating is the output format — not a schema it read hundreds
+    #     # of documents ago and has since forgotten.
+    #     content = (
+    #         f"=== INTELLIGENCE CORPUS ({n} documents) ===\n"
+    #         f"{doc_block}\n"
+    #         f"=== END CORPUS ===\n\n"
+    #         f"Analyse the {n} documents above and extract structured intelligence.\n\n"
+    #         f"{rules}\n\n"
+    #         f"Output ONLY the following JSON structure — no extra keys, no explanation, "
+    #         f"no markdown fences. Start immediately with '{{':\n"
+    #         f"{schema}"
+    #     )
+    #
+    #     messages = [{"role": "user", "content": content}]
+    #     system   = (
+    #         "You are a specialized intelligence extraction engine. "
+    #         "Output ONLY valid JSON that exactly matches the requested schema. "
+    #         "Do not output any text before or after the JSON object."
+    #     )
+    #     return messages, system
+
     def build_insights_messages(self, sample_docs: list[dict], task_type: str = "summary") -> tuple[list[dict], str]:
         """Build the messages list for the insights generation call.
 
@@ -319,7 +430,11 @@ class PromptBuilder:
 
         Budget calculation
         ------------------
-        available_chars = LLM_INSIGHTS_CTX × LLM_CHARS_PER_TOKEN
+        # We reserve 8k tokens for the response to ensure complex
+        # extractions (like graphs) don't get truncated.
+        RESPONSE_RESERVE_TOKENS = 8000
+
+        available_chars = (LLM_INSIGHTS_CTX - RESPONSE_RESERVE_TOKENS) * LLM_CHARS_PER_TOKEN
                           − LLM_INSIGHTS_RESERVE_CHARS
 
         Documents are packed greedily in sample order: each document gets its
@@ -335,22 +450,32 @@ class PromptBuilder:
         """
         prompt_map = {
             "summary": INSIGHTS_SUMMARY_PROMPT,
-            "graph":   INSIGHTS_GRAPH_PROMPT,
+            "graph": INSIGHTS_GRAPH_PROMPT,
         }
         system_prompt = prompt_map.get(task_type, INSIGHTS_SUMMARY_PROMPT)
 
         # ── Budget ─────────────────────────────────────────────────────────────
-        total_ctx_chars = int(Config.LLM_INSIGHTS_CTX * Config.LLM_CHARS_PER_TOKEN)
-        available_chars = total_ctx_chars - Config.LLM_INSIGHTS_RESERVE_CHARS
+        # Calculate the total window in tokens
+        total_window_tokens = Config.LLM_INSIGHTS_CTX
 
-        doc_lines   = []
-        used_chars  = 0
+        # Reserve 8,000 tokens for the LLM's output response
+        RESPONSE_RESERVE_TOKENS = 8000
+        input_budget_tokens = total_window_tokens - RESPONSE_RESERVE_TOKENS
+
+        # Convert the token budget to characters
+        # Note: If LLM_CHARS_PER_TOKEN is 4, but your data is dense (JSON/Special Chars),
+        # consider lowering this multiplier to 3.5 for a safer buffer.
+        total_input_chars = int(input_budget_tokens * Config.LLM_CHARS_PER_TOKEN)
+        available_chars = total_input_chars - Config.LLM_INSIGHTS_RESERVE_CHARS
+
+        doc_lines = []
+        used_chars = 0
 
         for doc in sample_docs:
-            title     = (doc.get("title") or "").strip()[:120]
-            topic     = (doc.get("topic")  or "").strip()
+            title = (doc.get("title") or "").strip()[:120]
+            topic = (doc.get("topic") or "").strip()
             sentiment = (doc.get("sentiment") or "").strip()
-            text      = (doc.get("text") or "").strip()
+            text = (doc.get("text") or "").strip()
 
             # Fixed metadata portion (always included)
             meta_parts: list[str] = []
@@ -358,44 +483,46 @@ class PromptBuilder:
             if topic:     meta_parts.append(f"topic={topic!r}")
             if sentiment: meta_parts.append(f"sentiment={sentiment!r}")
 
-            meta_str   = ", ".join(meta_parts)
+            meta_str = ", ".join(meta_parts)
             # Estimate chars consumed by this doc before adding text
-            overhead   = len(meta_str) + 6   # "[", "]", ", text=''", newline
+            overhead = len(meta_str) + 12  # Increased buffer for text key and formatting
 
             remaining_for_text = available_chars - used_chars - overhead
-            if remaining_for_text <= 0:
-                break   # No budget left for even the metadata of this doc
+
+            # If we can't fit at least a small sentence (e.g. 60 chars), skip this doc
+            if remaining_for_text < 60:
+                break
 
             # Pack as much text as fits
-            if text and remaining_for_text > 40:
+            if text:
                 if len(text) <= remaining_for_text:
                     meta_parts.append(f"text={text!r}")
                 else:
                     # Truncate text to fit; mark truncation with ellipsis
-                    trimmed = text[:remaining_for_text - 1].rstrip()
-                    meta_parts.append(f"text={trimmed!r}…")
+                    trimmed = text[:remaining_for_text - 5].rstrip()
+                    meta_parts.append(f"text={trimmed!r}...")
 
             line = f"[{', '.join(meta_parts)}]"
             doc_lines.append(line)
-            used_chars += len(line) + 1   # +1 for the trailing newline
+            used_chars += len(line) + 1  # +1 for the trailing newline
 
         n = len(doc_lines)
         approx_tokens = int(used_chars / Config.LLM_CHARS_PER_TOKEN)
-        total_words = sum(len(doc.get("text", "").split()) for doc in sample_docs)
+        total_words = sum(len(doc.get("text", "").split()) for doc in sample_docs[:n])
 
         logger.info(
             f"[insights] {task_type}: packed {n}/{len(sample_docs)} docs "
             f"({used_chars:,} chars ≈ {approx_tokens:,} tokens, {total_words:,} words) "
-            f"into {Config.LLM_INSIGHTS_CTX:,}-token context"
+            f"leaving ~{RESPONSE_RESERVE_TOKENS} tokens for response."
         )
 
         # Select the schema + rules that go AFTER the corpus
         if task_type == "graph":
             schema = INSIGHTS_GRAPH_SCHEMA
-            rules  = INSIGHTS_GRAPH_RULES
+            rules = INSIGHTS_GRAPH_RULES
         else:
             schema = INSIGHTS_SUMMARY_SCHEMA
-            rules  = INSIGHTS_SUMMARY_RULES
+            rules = INSIGHTS_SUMMARY_RULES
 
         doc_block = "\n".join(doc_lines)
 
@@ -415,7 +542,7 @@ class PromptBuilder:
         )
 
         messages = [{"role": "user", "content": content}]
-        system   = (
+        system = (
             "You are a specialized intelligence extraction engine. "
             "Output ONLY valid JSON that exactly matches the requested schema. "
             "Do not output any text before or after the JSON object."
