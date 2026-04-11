@@ -826,11 +826,20 @@ interface Props {
   /** Called whenever expanded doc changes so the parent can sync the URL. */
   onDocSelect?: (doc: Document | null) => void
   onSendToRag?: (docs: Document[]) => void
+  /** External query override — when set the DataTable is in controlled mode for search */
+  controlledQuery?: string
+  /** External filter override — when set the DataTable is in controlled mode for filters */
+  controlledFilters?: DocumentFilters
+  /** Show the source index column (useful in global explore view) */
+  showSourceIndex?: boolean
 }
 
-export function DataTable({ datasource, initialDocId, onDocSelect, onSendToRag }: Props) {
+export function DataTable({
+  datasource, initialDocId, onDocSelect, onSendToRag,
+  controlledQuery, controlledFilters, showSourceIndex,
+}: Props) {
   const { token } = theme.useToken()
-  const [query, setQuery] = useState('')
+  const [internalQuery, setInternalQuery] = useState('')
   const [searchVal, setSearchVal] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
@@ -838,7 +847,11 @@ export function DataTable({ datasource, initialDocId, onDocSelect, onSendToRag }
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [selectedRows, setSelectedRows] = useState<Document[]>([])
   const [showFilters, setShowFilters] = useState(false)
-  const [filters, setFilters] = useState<DocumentFilters>({})
+  const [internalFilters, setInternalFilters] = useState<DocumentFilters>({})
+
+  // Controlled mode: use externally provided state, fall back to internal
+  const query   = controlledQuery   !== undefined ? controlledQuery   : internalQuery
+  const filters = controlledFilters !== undefined ? controlledFilters : internalFilters
 
   const { data, isLoading, error } = useDocuments(datasource, page, pageSize, query, filters)
 
@@ -875,17 +888,17 @@ export function DataTable({ datasource, initialDocId, onDocSelect, onSendToRag }
   }
 
   const handleSearch = (value: string) => {
-    setQuery(value)
+    setInternalQuery(value)
     setPage(1)
   }
 
   const updateFilter = (key: keyof DocumentFilters, value: any) => {
-    setFilters((prev) => ({ ...prev, [key]: value || undefined }))
+    setInternalFilters((prev) => ({ ...prev, [key]: value || undefined }))
     setPage(1)
   }
 
   const clearFilters = () => {
-    setFilters({})
+    setInternalFilters({})
     setPage(1)
   }
 
@@ -893,7 +906,23 @@ export function DataTable({ datasource, initialDocId, onDocSelect, onSendToRag }
     (v) => v !== undefined && v !== '' && (Array.isArray(v) ? v.length > 0 : true),
   ).length
 
+  const sourceIndexCol = showSourceIndex
+    ? [{
+        title: 'Index',
+        dataIndex: '_source_index',
+        key: '_source_index',
+        width: 130,
+        ellipsis: true,
+        render: (val: string) => (
+          <Tag style={{ fontSize: 11, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {val || '—'}
+          </Tag>
+        ),
+      }]
+    : []
+
   const columns = [
+    ...sourceIndexCol,
     {
       title: 'Date',
       dataIndex: 'created_at',

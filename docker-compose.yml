@@ -194,47 +194,47 @@ services:
     restart: unless-stopped
 
   # ── Backend ─────────────────────────────────────────────────────────────────
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: qsint-rag-backend
-    networks: [ragnet]
-    ports:
-      - "${API_PORT:-5100}:5100"
-    env_file: .env
-    environment:
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-qf}:${POSTGRES_PASSWORD:-qf}@postgres:5432/${POSTGRES_DB:-qsint_rag}"
-      ES_HOST: "http://elasticsearch:9200"
-      LLM_BASE_URL: "http://ollama:11434/v1"
-      QSINT_OTLP_ENDPOINT: "http://jaeger:4317"
-      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
-      REDIS_HOST: "redis"
-      LLM_PARALLEL: "${LLM_PARALLEL:-2}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # ── Frontend (dev) ──────────────────────────────────────────────────────────
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
-    container_name: qsint-rag-frontend
-    networks: [ragnet]
-    ports:
-      - "${FRONTEND_PORT:-5173}:5173"
-    environment:
-      VITE_API_BASE_URL: "http://localhost:${API_PORT:-5100}"
-    volumes:
-      - ./frontend/src:/app/src:ro
-    depends_on:
-      - backend
-    restart: unless-stopped
+#  backend:
+#    build:
+#      context: .
+#      dockerfile: Dockerfile
+#    container_name: qsint-rag-backend
+#    networks: [ragnet]
+#    ports:
+#      - "${API_PORT:-5100}:5100"
+#    env_file: .env
+#    environment:
+#      DATABASE_URL: "postgresql://${POSTGRES_USER:-qf}:${POSTGRES_PASSWORD:-qf}@postgres:5432/${POSTGRES_DB:-qsint_rag}"
+#      ES_HOST: "http://elasticsearch:9200"
+#      LLM_BASE_URL: "http://ollama:11434/v1"
+#      QSINT_OTLP_ENDPOINT: "http://jaeger:4317"
+#      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+#      REDIS_HOST: "redis"
+#      LLM_PARALLEL: "${LLM_PARALLEL:-2}"
+#    depends_on:
+#      postgres:
+#        condition: service_healthy
+#      elasticsearch:
+#        condition: service_healthy
+#      ollama:
+#        condition: service_healthy
+#      kafka:
+#        condition: service_healthy
+#    restart: unless-stopped
+#
+#  # ── Frontend (dev) ──────────────────────────────────────────────────────────
+#  frontend:
+#    build:
+#      context: ./frontend
+#      dockerfile: Dockerfile.dev
+#    container_name: qsint-rag-frontend
+#    networks: [ragnet]
+#    ports:
+#      - "${FRONTEND_PORT:-5173}:5173"
+#    environment:
+#      VITE_API_BASE_URL: "http://localhost:${API_PORT:-5100}"
+#    volumes:
+#      - ./frontend/src:/app/src:ro
+#    depends_on:
+#      - backend
+#    restart: unless-stopped

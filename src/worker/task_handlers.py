@@ -27,6 +27,8 @@ def dispatch_task(task: dict) -> None:
             handle_enrich_doc(task)
         elif ttype == "enrich_field":
             handle_enrich_field(task)
+        elif ttype == "create_investigation":
+            handle_create_investigation(task)
         else:
             logger.warning(f"[worker] Unknown task_type: {ttype!r}")
             return
@@ -97,6 +99,108 @@ def handle_enrich_doc(task: dict) -> None:
     """Full document enrichment (all fields via LLM + regex + geocoding)."""
     from src.api.endpoints import _run_enrichment_background
     _run_enrichment_background(task["datasource"], task["doc_id"], task["text"])
+
+
+def handle_create_investigation(task: dict) -> None:
+    """Create an ES index for an investigation and populate it from saved searches.
+
+    task = {
+        "task_type":        "create_investigation",
+        "investigation_id": str,
+        "index_name":       str,
+        "search_ids":       [str, ...],
+    }
+    """
+    from src.session.session_service import (
+        get_investigation, update_investigation_status, get_saved_search,
+    )
+    from src.datasource.es_client import ESClient
+
+    investigation_id = task["investigation_id"]
+    index_name       = task["index_name"]
+    search_ids       = task.get("search_ids") or []
+
+    logger.info(f"[worker] create_investigation id={investigation_id} index={index_name} "
+                f"searches={len(search_ids)}")
+
+    try:
+        client = ESClient()
+
+        # 1. Create the destination index
+        client.create_index(index_name)
+
+        # 2. For each saved search, build ES query and copy matching docs
+        total_copied = 0
+
+        if not search_ids:
+            # No searches attached — create empty investigation immediately
+            update_investigation_status(investigation_id, "ready", doc_count=0)
+            return
+
+        for sid in search_ids:
+            search = get_saved_search(sid)
+            if not search:
+                logger.warning(f"[worker] Saved search {sid} not found, skipping")
+                continue
+
+            q_text  = (search.get("query") or "").strip()
+            filters = search.get("filters") or {}
+
+            # Determine source indices
+            index_patterns = filters.get("index_patterns") or []
+            source_indices = index_patterns if index_patterns else ["qsint_docs*"]
+
+            # Build ES query from saved search
+            es_filters = []
+            if filters.get("sentiment"):
+                es_filters.append({"term": {"sentiment.keyword": filters["sentiment"]}})
+            if filters.get("date_from") or filters.get("date_to"):
+                range_clause: dict = {}
+                if filters.get("date_from"):
+                    range_clause["gte"] = filters["date_from"]
+                if filters.get("date_to"):
+                    range_clause["lte"] = filters["date_to"]
+                es_filters.append({"range": {"created_at": range_clause}})
+
+            if q_text:
+                text_query = {
+                    "query_string": {
+                        "query":            q_text[:512],
+                        "default_operator": "AND",
+                    }
+                }
+            else:
+                text_query = {"match_all": {}}
+
+            query_body = {
+                "query": (
+                    {"bool": {"must": text_query, "filter": es_filters}}
+                    if es_filters
+                    else text_query
+                )
+            }
+
+            try:
+                copied = client.copy_documents(
+                    source_indices=source_indices,
+                    query_body=query_body,
+                    dest_index=index_name,
+                )
+                total_copied += copied
+                logger.info(f"[worker] Search {sid}: copied {copied} docs → {index_name}")
+            except Exception as e:
+                logger.error(f"[worker] Search {sid} copy failed: {e}", exc_info=True)
+
+        update_investigation_status(investigation_id, "ready", doc_count=total_copied)
+        logger.info(f"[worker] Investigation {investigation_id} ready, total={total_copied} docs")
+
+    except Exception as e:
+        logger.error(f"[worker] create_investigation failed id={investigation_id}: {e}", exc_info=True)
+        try:
+            update_investigation_status(investigation_id, "error", error_msg=str(e))
+        except Exception:
+            pass
+        raise
 
 
 def handle_enrich_field(task: dict) -> None:

@@ -22,7 +22,8 @@ export function useDocuments(
   return useQuery({
     queryKey: ['documents', datasource, offset, pageSize, query, filters],
     queryFn: () => fetchDocuments(datasource, offset, pageSize, query, filters),
-    enabled: !!datasource,
+    // Allow empty datasource for global explore (all-index search)
+    enabled: true,
     staleTime: 10_000,
   })
 }

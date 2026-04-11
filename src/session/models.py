@@ -172,6 +172,99 @@ class DocumentLabel(Base):
         }
 
 
+class SavedSearch(Base):
+    """A named, reusable search query with optional filter presets.
+
+    Analysts save queries they use repeatedly. Saved searches are the
+    building blocks of Investigations — each investigation is seeded by
+    running one or more saved searches and copying matching documents into
+    a dedicated ES index.
+    """
+    __tablename__ = "rag_saved_searches"
+
+    id          = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name        = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    query       = Column(Text, nullable=False, default="")
+    # { sentiment, status, labels[], classification,
+    #   index_patterns[], date_from, date_to, fields[] }
+    filters     = Column(JSON, nullable=False, default=dict)
+    created_at  = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at  = Column(DateTime, nullable=False,
+                         default=lambda: datetime.now(timezone.utc),
+                         onupdate=lambda: datetime.now(timezone.utc))
+
+    investigation_links = relationship("InvestigationSearch", back_populates="search",
+                                       cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            "id":          self.id,
+            "name":        self.name,
+            "description": self.description,
+            "query":       self.query,
+            "filters":     self.filters or {},
+            "created_at":  self.created_at.isoformat() if self.created_at else None,
+            "updated_at":  self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Investigation(Base):
+    """An analyst investigation — a named collection of documents seeded from saved searches.
+
+    When created, a background task builds a dedicated ES index named
+    ``inv_{slug}_{id[:8]}`` by running all attached saved searches and
+    bulk-copying matching documents into it.  The investigation then offers
+    its own Data Exploration, Intelligence Report, and RAG Chat tabs.
+    """
+    __tablename__ = "rag_investigations"
+
+    id          = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name        = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    index_name  = Column(String(255), nullable=False)  # "inv_{slug}_{id[:8]}"
+    status      = Column(String(20),  nullable=False, default="creating", index=True)
+    # "creating" | "ready" | "error"
+    error_msg   = Column(Text, nullable=True)
+    doc_count   = Column(Integer, nullable=True)
+    created_at  = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at  = Column(DateTime, nullable=False,
+                         default=lambda: datetime.now(timezone.utc),
+                         onupdate=lambda: datetime.now(timezone.utc))
+
+    search_links = relationship("InvestigationSearch", back_populates="investigation",
+                                cascade="all, delete-orphan")
+
+    def to_dict(self, search_ids: list[str] | None = None):
+        return {
+            "id":          self.id,
+            "name":        self.name,
+            "description": self.description,
+            "index_name":  self.index_name,
+            "status":      self.status,
+            "error_msg":   self.error_msg,
+            "doc_count":   self.doc_count,
+            "search_ids":  search_ids if search_ids is not None else [],
+            "created_at":  self.created_at.isoformat() if self.created_at else None,
+            "updated_at":  self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class InvestigationSearch(Base):
+    """Many-to-many join between investigations and saved searches."""
+    __tablename__ = "rag_investigation_searches"
+
+    investigation_id = Column(String(36),
+                              ForeignKey("rag_investigations.id", ondelete="CASCADE"),
+                              primary_key=True)
+    search_id        = Column(String(36),
+                              ForeignKey("rag_saved_searches.id", ondelete="CASCADE"),
+                              primary_key=True)
+
+    investigation = relationship("Investigation", back_populates="search_links")
+    search        = relationship("SavedSearch",   back_populates="investigation_links")
+
+
 class DocumentEnrichment(Base):
     """Cache for AI enrichment (sentiment, NER, classification, summary) on a single document."""
     __tablename__ = "rag_document_enrichment"

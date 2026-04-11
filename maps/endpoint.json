@@ -305,6 +305,50 @@
         "module_name": "api.endpoints",
         "method_name": "documents_labels_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_searches",
+      "model_name": "Empty",
+      "request_method": ["GET", "POST"],
+      "api_url": "/v1/searches",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "searches_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_search_detail",
+      "model_name": "Empty",
+      "request_method": ["PUT", "DELETE"],
+      "api_url": "/v1/searches/<search_id>",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "search_detail_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_investigations",
+      "model_name": "Empty",
+      "request_method": ["GET", "POST"],
+      "api_url": "/v1/investigations",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "investigations_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_investigation_detail",
+      "model_name": "Empty",
+      "request_method": ["GET", "DELETE"],
+      "api_url": "/v1/investigations/<investigation_id>",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "investigation_detail_handler"
+      }
     }
   ]
 }

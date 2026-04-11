@@ -19,6 +19,9 @@ export interface DocumentFilters {
   status?: string
   labels?: string[]
   classification?: string
+  date_from?: string
+  date_to?: string
+  index_patterns?: string[]
 }
 
 export const fetchDocuments = async (
@@ -28,11 +31,18 @@ export const fetchDocuments = async (
   query = '',
   filters: DocumentFilters = {},
 ): Promise<{ documents: Document[]; total: number }> => {
-  const params: Record<string, any> = { datasource, offset, limit, query }
-  if (filters.sentiment)       params.filter_sentiment      = filters.sentiment
-  if (filters.status)          params.filter_status         = filters.status
-  if (filters.labels?.length)  params.filter_labels         = filters.labels.join(',')
-  if (filters.classification)  params.filter_classification = filters.classification
+  const params: Record<string, any> = { offset, limit, query }
+  // Only send datasource param when a specific index is targeted
+  if (datasource) params.datasource = datasource
+  if (filters.sentiment)          params.filter_sentiment      = filters.sentiment
+  if (filters.status)             params.filter_status         = filters.status
+  if (filters.labels?.length)     params.filter_labels         = filters.labels.join(',')
+  if (filters.classification)     params.filter_classification = filters.classification
+  if (filters.date_from)          params.filter_date_from      = filters.date_from
+  if (filters.date_to)            params.filter_date_to        = filters.date_to
+  if (filters.index_patterns?.length) {
+    params.index_pattern = filters.index_patterns.join(',')
+  }
   const { data } = await apiClient.get<{ documents: Document[]; total: number }>('/v1/documents', { params })
   return data
 }

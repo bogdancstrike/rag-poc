@@ -509,13 +509,23 @@ def datasource_indices_handler(app, operation, request, **kwargs):
 def documents_handler(app, operation, request, **kwargs):
     """GET /v1/documents — get raw documents for tabular view.
 
+    When ``datasource`` is omitted the handler searches across all
+    ``qsint_docs*`` indices (global Data Exploration).  PG-based filters
+    (status, labels, classification) are only applied when a specific
+    datasource is given, because those PG tables are keyed by (doc_id,
+    datasource).
+
     Optional filter params:
+      datasource          — ES index name (omit for all-index search)
       filter_sentiment    — match on sentiment.keyword field in ES
-      filter_status       — 'in_progress' | 'done' — resolved from PG
-      filter_labels       — comma-separated label values — resolved from PG
-      filter_classification — match on enrichment classification field in PG
+      filter_status       — 'in_progress' | 'done' — resolved from PG (single-index only)
+      filter_labels       — comma-separated label values — resolved from PG (single-index only)
+      filter_classification — match on enrichment classification — resolved from PG (single-index only)
+      filter_date_from    — ISO date string (inclusive lower bound on created_at)
+      filter_date_to      — ISO date string (inclusive upper bound on created_at)
+      index_pattern       — glob pattern for multi-index search (default: qsint_docs*)
     """
-    datasource = flask_request.args.get("datasource")
+    datasource = (flask_request.args.get("datasource") or "").strip() or None
     query      = flask_request.args.get("query", "")
     offset     = int(flask_request.args.get("offset", 0))
     limit      = int(flask_request.args.get("limit", 50))
@@ -524,15 +534,35 @@ def documents_handler(app, operation, request, **kwargs):
     filter_status         = flask_request.args.get("filter_status", "").strip() or None
     filter_labels_raw     = flask_request.args.get("filter_labels", "").strip()
     filter_classification = flask_request.args.get("filter_classification", "").strip() or None
+    filter_date_from      = flask_request.args.get("filter_date_from", "").strip() or None
+    filter_date_to        = flask_request.args.get("filter_date_to", "").strip() or None
+    index_pattern         = flask_request.args.get("index_pattern", "qsint_docs*").strip() or "qsint_docs*"
 
     filter_labels = [l.strip() for l in filter_labels_raw.split(",") if l.strip()] if filter_labels_raw else []
 
     with tracer.start_as_current_span("api.documents") as span:
-        span.set_attribute("documents.datasource", datasource or "")
+        span.set_attribute("documents.datasource", datasource or "all")
         try:
             from src.datasource.es_client import ESClient
             from src.session.models import DocumentStatus, DocumentLabel, DocumentEnrichment, get_db
 
+            client = ESClient()
+
+            # ── Multi-index global search (no specific datasource) ────────────
+            if not datasource:
+                docs, total = client.search_all_indices(
+                    query=query,
+                    offset=offset,
+                    limit=limit,
+                    sentiment_filter=filter_sentiment,
+                    date_from=filter_date_from,
+                    date_to=filter_date_to,
+                    index_pattern=index_pattern,
+                )
+                span.set_attribute("documents.total", total)
+                return {"documents": docs, "total": total}, 200
+
+            # ── Single-index search with optional PG-based filters ────────────
             # Resolve PG-based filters to a set of matching doc IDs
             id_filter = None  # None means "no restriction"
 
@@ -548,7 +578,6 @@ def documents_handler(app, operation, request, **kwargs):
 
                 if filter_labels:
                     # A document must have ALL requested labels.
-                    # Build result dict inside the session to avoid DetachedInstanceError.
                     with get_db() as db:
                         rows = db.query(DocumentLabel).filter_by(datasource=datasource).all()
                         rows_data = [(r.doc_id, list(r.labels or [])) for r in rows]
@@ -561,7 +590,6 @@ def documents_handler(app, operation, request, **kwargs):
 
                 if filter_classification:
                     fc_lower = filter_classification.lower()
-                    # Build (doc_id, classification) pairs inside the session.
                     with get_db() as db:
                         enriched_rows = db.query(DocumentEnrichment).filter(
                             DocumentEnrichment.datasource == datasource,
@@ -578,7 +606,6 @@ def documents_handler(app, operation, request, **kwargs):
                         combined = combined & s
                     id_filter = list(combined)
 
-            client = ESClient()
             docs, total = client.get_documents(
                 index_name=datasource,
                 offset=offset,
@@ -1621,3 +1648,178 @@ def documents_labels_handler(app, operation, request, **kwargs):
                 db.delete(row)
 
     return {"doc_id": doc_id, "datasource": datasource, "labels": labels}, 200
+
+
+# ── Saved Searches ─────────────────────────────────────────────────────────────
+
+def searches_handler(app, operation, request, **kwargs):
+    """GET  /v1/searches — list all saved searches.
+    POST /v1/searches — create a saved search.
+
+    POST body: { name, description?, query?, filters? }
+    """
+    from src.session.session_service import list_saved_searches, create_saved_search
+
+    method = flask_request.method
+
+    if method == "GET":
+        try:
+            searches = list_saved_searches()
+            return {"searches": searches, "total": len(searches)}, 200
+        except Exception as e:
+            logger.error(f"[api] searches_handler GET error: {e}")
+            return {"error": str(e)}, 500
+
+    # POST
+    body = _json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return {"error": "name is required"}, 400
+
+    try:
+        search = create_saved_search(
+            name=name,
+            description=body.get("description"),
+            query=body.get("query", ""),
+            filters=body.get("filters") or {},
+        )
+        return search, 201
+    except Exception as e:
+        logger.error(f"[api] searches_handler POST error: {e}")
+        return {"error": str(e)}, 500
+
+
+def search_detail_handler(app, operation, request, search_id: str = "", **kwargs):
+    """PUT    /v1/searches/<search_id> — update a saved search.
+    DELETE /v1/searches/<search_id> — delete a saved search.
+    """
+    sid = search_id or kwargs.get("search_id", "")
+    if not sid:
+        return {"error": "search_id is required"}, 400
+
+    from src.session.session_service import update_saved_search, delete_saved_search
+
+    method = flask_request.method
+
+    if method == "DELETE":
+        try:
+            found = delete_saved_search(sid)
+            if not found:
+                return {"error": "Saved search not found"}, 404
+            return {"status": "deleted", "id": sid}, 200
+        except Exception as e:
+            logger.error(f"[api] search_detail_handler DELETE error: {e}")
+            return {"error": str(e)}, 500
+
+    # PUT
+    body = _json()
+    try:
+        updated = update_saved_search(
+            search_id=sid,
+            name=body.get("name"),
+            description=body.get("description"),
+            query=body.get("query"),
+            filters=body.get("filters"),
+        )
+        if updated is None:
+            return {"error": "Saved search not found"}, 404
+        return updated, 200
+    except Exception as e:
+        logger.error(f"[api] search_detail_handler PUT error: {e}")
+        return {"error": str(e)}, 500
+
+
+# ── Investigations ─────────────────────────────────────────────────────────────
+
+def investigations_handler(app, operation, request, **kwargs):
+    """GET  /v1/investigations — list all investigations.
+    POST /v1/investigations — create a new investigation.
+
+    POST body: { name, description?, search_ids?: [str] }
+
+    On creation the handler:
+      1. Persists the investigation row with status="creating"
+      2. Publishes a "create_investigation" task to the fast-task topic
+      3. Returns 202 Accepted with the investigation dict
+    """
+    from src.session.session_service import list_investigations, create_investigation
+
+    method = flask_request.method
+
+    if method == "GET":
+        try:
+            invs = list_investigations()
+            return {"investigations": invs, "total": len(invs)}, 200
+        except Exception as e:
+            logger.error(f"[api] investigations_handler GET error: {e}")
+            return {"error": str(e)}, 500
+
+    # POST
+    body = _json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return {"error": "name is required"}, 400
+
+    search_ids = body.get("search_ids") or []
+
+    try:
+        inv = create_investigation(
+            name=name,
+            description=body.get("description"),
+            search_ids=search_ids,
+        )
+
+        # Publish background task after DB commit
+        from src.worker.kafka_producer import publish_task
+        publish_task({
+            "task_type":        "create_investigation",
+            "investigation_id": inv["id"],
+            "index_name":       inv["index_name"],
+            "search_ids":       search_ids,
+        })
+
+        return inv, 202
+    except Exception as e:
+        logger.error(f"[api] investigations_handler POST error: {e}")
+        return {"error": str(e)}, 500
+
+
+def investigation_detail_handler(app, operation, request, investigation_id: str = "", **kwargs):
+    """GET    /v1/investigations/<investigation_id> — get investigation detail.
+    DELETE /v1/investigations/<investigation_id> — delete investigation + ES index.
+    """
+    iid = investigation_id or kwargs.get("investigation_id", "")
+    if not iid:
+        return {"error": "investigation_id is required"}, 400
+
+    from src.session.session_service import get_investigation, delete_investigation
+
+    method = flask_request.method
+
+    if method == "GET":
+        try:
+            inv = get_investigation(iid)
+            if inv is None:
+                return {"error": "Investigation not found"}, 404
+            return inv, 200
+        except Exception as e:
+            logger.error(f"[api] investigation_detail_handler GET error: {e}")
+            return {"error": str(e)}, 500
+
+    # DELETE
+    try:
+        index_name = delete_investigation(iid)
+        if index_name is None:
+            return {"error": "Investigation not found"}, 404
+
+        # Best-effort ES index deletion — don't fail the whole request if it errors
+        try:
+            from src.datasource.es_client import ESClient
+            ESClient().delete_index(index_name)
+        except Exception as es_err:
+            logger.warning(f"[api] ES index deletion failed for '{index_name}': {es_err}")
+
+        return {"status": "deleted", "id": iid, "index_name": index_name}, 200
+    except Exception as e:
+        logger.error(f"[api] investigation_detail_handler DELETE error: {e}")
+        return {"error": str(e)}, 500

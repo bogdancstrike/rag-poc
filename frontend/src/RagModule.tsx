@@ -2,12 +2,16 @@
  * RagModule — root component with react-router-dom based URL routing.
  *
  * Routes:
- *   /                      → redirect to /dashboard
- *   /dashboard             → Platform Overview
- *   /tasks                 → Task Monitor
- *   /tasks/:id             → Task Detail
- *   /index/:idx            → Index page (tabs: Data / Intelligence Report / RAG Chat)
- *   /index/:idx/:docId     → Index page with document pinned
+ *   /                         → redirect to /overview
+ *   /overview                 → Platform Overview
+ *   /tasks                    → Task Monitor
+ *   /tasks/:id                → Task Detail
+ *   /explore                  → Data Exploration (all indices)
+ *   /investigations           → Investigations list
+ *   /investigations/:id       → Investigation detail (Data / Insights / Chat tabs)
+ *   /dashboard                → legacy redirect → /overview
+ *   /index/:idx               → legacy index page (kept for backwards compat)
+ *   /index/:idx/:docId        → legacy index page with pinned doc
  */
 
 import { useState, useEffect } from 'react'
@@ -16,11 +20,12 @@ import {
 } from 'react-router-dom'
 import {
   ConfigProvider, Layout, theme as antTheme, Typography, Space,
-  Button, Tooltip, Menu, Spin, Alert, Tabs,
+  Button, Tooltip, Menu, Tabs,
 } from 'antd'
 import {
-  BulbOutlined, MessageOutlined, BgColorsOutlined, DatabaseOutlined,
-  DashboardOutlined, UnorderedListOutlined, TableOutlined,
+  BulbOutlined, MessageOutlined, BgColorsOutlined,
+  DashboardOutlined, UnorderedListOutlined, TableOutlined, ApartmentOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useThemeStore } from '@/stores/themeStore'
@@ -28,12 +33,14 @@ import { useSessionStore } from '@/stores/sessionStore'
 import { InsightsPanel } from '@/components/insights/InsightsPanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { DataTable } from '@/components/explore/DataTable'
+import { DataExplorationPage } from '@/components/explore/DataExplorationPage'
+import { InvestigationsPage } from '@/components/investigations/InvestigationsPage'
+import { InvestigationDetail } from '@/components/investigations/InvestigationDetail'
 import { OverviewDashboard } from '@/components/dashboard/OverviewDashboard'
 import { TaskDetailPanel } from '@/components/dashboard/TaskDetailPanel'
 import { TasksPage } from '@/components/tasks/TasksPage'
-import { useIndices } from '@/hooks/useExplore'
 
-const { Header, Content, Sider } = Layout
+const { Header, Sider, Content } = Layout
 const { Text } = Typography
 
 const queryClient = new QueryClient({
@@ -42,120 +49,154 @@ const queryClient = new QueryClient({
   },
 })
 
-// ── Sidebar navigation ─────────────────────────────────────────────────────
+// ── Left sidebar navigation ────────────────────────────────────────────────
+
+const NAV_ITEMS = [
+  { key: '/overview',       label: 'Platform Overview', icon: <DashboardOutlined /> },
+  { key: '/tasks',          label: 'Task Monitor',      icon: <UnorderedListOutlined /> },
+  { key: '/explore',        label: 'Data Exploration',  icon: <TableOutlined /> },
+  { key: '/investigations', label: 'Investigations',    icon: <ApartmentOutlined /> },
+]
 
 function AppSidebar() {
-  const navigate = useNavigate()
-  const location = useLocation()
-  const { data: indices, isLoading, error } = useIndices()
-  const { token } = antTheme.useToken()
+  const navigate   = useNavigate()
+  const location   = useLocation()
+  const { token }  = antTheme.useToken()
+  const [collapsed, setCollapsed] = useState(false)
 
-  /** Derive the currently selected sidebar key from the URL. */
   const selectedKey = (() => {
-    const path = location.pathname
-    if (path === '/' || path.startsWith('/dashboard')) return '__dashboard__'
-    if (path.startsWith('/tasks')) return '__tasks__'
-    const m = path.match(/^\/index\/([^/]+)/)
-    if (m) return decodeURIComponent(m[1])
+    const p = location.pathname
+    if (p === '/' || p.startsWith('/overview') || p.startsWith('/dashboard')) return '/overview'
+    if (p.startsWith('/tasks'))          return '/tasks'
+    if (p.startsWith('/explore'))        return '/explore'
+    if (p.startsWith('/investigations')) return '/investigations'
     return ''
   })()
 
-  const menuItems = [
-    { key: '__dashboard__', icon: <DashboardOutlined />, label: 'Platform Overview' },
-    { key: '__tasks__', icon: <UnorderedListOutlined />, label: 'Task Monitor' },
-    { type: 'divider' },
-    ...(indices || []).map((idx) => ({
-      key: idx,
-      icon: <DatabaseOutlined />,
-      label: idx,
-    })),
-  ]
-
-  const handleSelect = ({ key }: { key: string }) => {
-    if (key === '__dashboard__') navigate('/dashboard')
-    else if (key === '__tasks__') navigate('/tasks')
-    else navigate(`/index/${encodeURIComponent(key)}`)
-  }
-
   return (
     <Sider
-      width={240}
+      collapsible
+      collapsed={collapsed}
+      onCollapse={setCollapsed}
+      width={220}
+      collapsedWidth={56}
+      trigger={null}          // we render our own trigger below
       style={{
-        background: token.colorBgContainer,
-        borderRight: `1px solid ${token.colorBorderSecondary}`,
-        height: '100%',
-        overflow: 'auto',
+        background:   token.colorBgContainer,
+        borderRight:  `1px solid ${token.colorBorderSecondary}`,
+        display:      'flex',
+        flexDirection:'column',
+        height:       '100vh',
+        position:     'sticky',
+        top:          0,
+        overflow:     'hidden',
       }}
     >
-      <div style={{ padding: '12px 16px 4px' }}>
-        <Text type="secondary" strong style={{ fontSize: 11 }}>AVAILABLE INDICES</Text>
+      {/* Brand row */}
+      <div
+        style={{
+          height:         52,
+          display:        'flex',
+          alignItems:     'center',
+          padding:        collapsed ? '0 16px' : '0 16px',
+          gap:            10,
+          borderBottom:   `1px solid ${token.colorBorderSecondary}`,
+          flexShrink:     0,
+          overflow:       'hidden',
+          whiteSpace:     'nowrap',
+        }}
+      >
+        <BulbOutlined style={{ color: token.colorPrimary, fontSize: 18, flexShrink: 0 }} />
+        {!collapsed && (
+          <div style={{ overflow: 'hidden' }}>
+            <Text strong style={{ fontSize: 13, display: 'block', lineHeight: '16px' }}>
+              QSINT
+            </Text>
+            <Text type="secondary" style={{ fontSize: 10, lineHeight: '13px' }}>
+              Intelligence Platform
+            </Text>
+          </div>
+        )}
       </div>
-      {isLoading ? (
-        <div style={{ padding: 16, textAlign: 'center' }}><Spin /></div>
-      ) : error ? (
-        <Alert type="error" message="Failed to load indices" style={{ margin: 8 }} />
-      ) : (
+
+      {/* Nav menu — fills remaining space */}
+      <div style={{ flex: 1, overflow: 'hidden auto' }}>
         <Menu
           mode="inline"
           selectedKeys={[selectedKey]}
-          onClick={handleSelect}
-          items={menuItems as any}
-          style={{ borderRight: 0 }}
+          inlineCollapsed={collapsed}
+          onClick={({ key }) => navigate(key)}
+          items={NAV_ITEMS}
+          style={{ border: 0, marginTop: 4 }}
         />
-      )}
+      </div>
+
+      {/* Footer: collapse toggle only */}
+      <div
+        style={{
+          borderTop:      `1px solid ${token.colorBorderSecondary}`,
+          padding:        '8px',
+          display:        'flex',
+          alignItems:     'center',
+          justifyContent: 'center',
+          flexShrink:     0,
+        }}
+      >
+        <Tooltip title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} placement="right">
+          <Button
+            type="text"
+            size="small"
+            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            onClick={() => setCollapsed((c) => !c)}
+          />
+        </Tooltip>
+      </div>
     </Sider>
   )
 }
 
-// ── Top bar ────────────────────────────────────────────────────────────────
+// ── Top navbar ─────────────────────────────────────────────────────────────
 
-function AppHeader() {
+function AppNavbar() {
   const { token } = antTheme.useToken()
   const { mode, toggle } = useThemeStore()
   const location = useLocation()
 
-  // Show current index name in header when on an index page
-  const indexMatch = location.pathname.match(/^\/index\/([^/]+)/)
-  const currentIndex = indexMatch ? decodeURIComponent(indexMatch[1]) : ''
+  // Derive current page label for breadcrumb
+  const pageLabel = (() => {
+    const p = location.pathname
+    if (p.startsWith('/overview') || p === '/') return 'Platform Overview'
+    if (p.startsWith('/tasks'))                  return 'Task Monitor'
+    if (p.startsWith('/explore'))                return 'Data Exploration'
+    if (p.startsWith('/investigations'))         return 'Investigations'
+    if (p.startsWith('/index'))                  return 'Index Explorer'
+    return ''
+  })()
 
   return (
     <Header
       style={{
-        padding: '0 16px',
-        height: 48,
-        lineHeight: '48px',
-        background: token.colorBgContainer,
-        borderBottom: `1px solid ${token.colorBorderSecondary}`,
-        display: 'flex',
-        alignItems: 'center',
+        padding:        '0 20px',
+        height:         48,
+        lineHeight:     '48px',
+        background:     token.colorBgContainer,
+        borderBottom:   `1px solid ${token.colorBorderSecondary}`,
+        display:        'flex',
+        alignItems:     'center',
         justifyContent: 'space-between',
-        flexShrink: 0,
+        flexShrink:     0,
       }}
     >
-      <Space>
-        <BulbOutlined style={{ color: token.colorPrimary, fontSize: 16 }} />
-        <Text strong style={{ fontSize: 14 }}>QSINT RAG</Text>
-        <Text style={{ fontSize: 11, color: token.colorTextDescription }}>
-          Intelligence Platform
-        </Text>
-        {currentIndex && (
-          <Text style={{ fontSize: 11, color: token.colorTextSecondary }}>
-            / {currentIndex}
-          </Text>
-        )}
-      </Space>
-      <Space size={16}>
-        <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
-          <Button type="text" size="small" icon={<BgColorsOutlined />} onClick={toggle} />
-        </Tooltip>
-      </Space>
+      <Text type="secondary" style={{ fontSize: 13 }}>{pageLabel}</Text>
+      <Tooltip title={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}>
+        <Button type="text" size="small" icon={<BgColorsOutlined />} onClick={toggle} />
+      </Tooltip>
     </Header>
   )
 }
 
-// ── Page views ─────────────────────────────────────────────────────────────
+// ── Page wrappers ──────────────────────────────────────────────────────────
 
-/** Platform Overview at /dashboard */
 function DashboardPage() {
   const navigate = useNavigate()
   return (
@@ -165,7 +206,6 @@ function DashboardPage() {
   )
 }
 
-/** Task monitor at /tasks */
 function TasksPageWrapper() {
   const navigate = useNavigate()
   return (
@@ -175,7 +215,6 @@ function TasksPageWrapper() {
   )
 }
 
-/** Task detail page at /tasks/:id */
 function TaskDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -189,7 +228,12 @@ function TaskDetailPage() {
   )
 }
 
-/** Index page at /index/:idx and /index/:idx/:docId — Data / Intelligence Report / RAG Chat */
+function InvestigationDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  return <InvestigationDetail id={id ?? ''} />
+}
+
+/** Legacy index page — kept so old bookmarks / links still work */
 function IndexPage() {
   const { idx, docId } = useParams<{ idx: string; docId?: string }>()
   const navigate = useNavigate()
@@ -210,13 +254,11 @@ function IndexPage() {
     }
   }, [storePending])
 
-  // Support navigate(..., { state: { tab: 'insights' } }) from Task detail
   useEffect(() => {
     const tabFromState = (location.state as any)?.tab
     if (tabFromState) setActiveTab(tabFromState)
   }, [location.state])
 
-  // When a docId appears in the URL (e.g. "Go to doc" from chat), switch to data tab
   useEffect(() => {
     if (docId) setActiveTab('data')
   }, [docId])
@@ -245,12 +287,7 @@ function IndexPage() {
   const tabItems = [
     {
       key: 'data',
-      label: (
-        <Space>
-          <TableOutlined />
-          Data Exploration
-        </Space>
-      ),
+      label: <Space><TableOutlined />Data Exploration</Space>,
       children: (
         <div style={{ height: 'calc(100vh - 108px)', padding: 16, overflowY: 'auto' }}>
           <DataTable
@@ -264,12 +301,7 @@ function IndexPage() {
     },
     {
       key: 'insights',
-      label: (
-        <Space>
-          <BulbOutlined />
-          Intelligence Report
-        </Space>
-      ),
+      label: <Space><BulbOutlined />Intelligence Report</Space>,
       children: (
         <div style={{ overflowY: 'auto', height: 'calc(100vh - 108px)', padding: 16 }}>
           <InsightsPanel
@@ -282,12 +314,7 @@ function IndexPage() {
     },
     {
       key: 'chat',
-      label: (
-        <Space>
-          <MessageOutlined />
-          RAG Chat
-        </Space>
-      ),
+      label: <Space><MessageOutlined />RAG Chat</Space>,
       children: (
         <div style={{ height: 'calc(100vh - 108px)' }}>
           <ChatPanel
@@ -320,22 +347,25 @@ function IndexPage() {
 
 function AppShell() {
   const { token } = antTheme.useToken()
-
   return (
     <Layout style={{ height: '100vh', background: token.colorBgLayout }}>
-      <AppHeader />
-      <Layout>
-        <AppSidebar />
-        <Content style={{ position: 'relative', overflow: 'hidden' }}>
+      <AppSidebar />
+      <Layout style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <AppNavbar />
+        <Content style={{ position: 'relative', overflow: 'hidden', flex: 1 }}>
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/" element={<Navigate to="/overview" replace />} />
+            <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
+            <Route path="/overview" element={<DashboardPage />} />
             <Route path="/tasks" element={<TasksPageWrapper />} />
             <Route path="/tasks/:id" element={<TaskDetailPage />} />
+            <Route path="/explore" element={<DataExplorationPage />} />
+            <Route path="/investigations" element={<InvestigationsPage />} />
+            <Route path="/investigations/:id" element={<InvestigationDetailPage />} />
+            {/* Legacy index routes */}
             <Route path="/index/:idx" element={<IndexPage />} />
             <Route path="/index/:idx/:docId" element={<IndexPage />} />
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/overview" replace />} />
           </Routes>
         </Content>
       </Layout>

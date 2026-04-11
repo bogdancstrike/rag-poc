@@ -89,3 +89,42 @@ export type SseEvent =
   | { type: 'delta';    content: string }
   | { type: 'done';     message_id: string; session_id: string }
   | { type: 'error';    content: string }
+
+// ── Saved Search types ────────────────────────────────────────────────────────
+
+export interface SavedSearchFilters {
+  sentiment?:       string
+  status?:          string
+  labels?:          string[]
+  classification?:  string
+  index_patterns?:  string[]
+  date_from?:       string
+  date_to?:         string
+}
+
+export interface SavedSearch {
+  id:          string
+  name:        string
+  description: string | null
+  query:       string
+  filters:     SavedSearchFilters
+  created_at:  string
+  updated_at:  string
+}
+
+// ── Investigation types ───────────────────────────────────────────────────────
+
+export type InvestigationStatus = 'creating' | 'ready' | 'error'
+
+export interface Investigation {
+  id:          string
+  name:        string
+  description: string | null
+  index_name:  string
+  status:      InvestigationStatus
+  error_msg:   string | null
+  doc_count:   number | null
+  search_ids:  string[]
+  created_at:  string
+  updated_at:  string
+}

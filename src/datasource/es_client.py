@@ -331,3 +331,167 @@ class ESClient:
             },
         )
         logger.info(f"[es] Created index '{idx}'")
+
+    # ── Investigation / multi-index helpers ────────────────────────────────────
+
+    def search_all_indices(
+        self,
+        query: str = "",
+        offset: int = 0,
+        limit: int = 50,
+        sentiment_filter: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        index_pattern: str = "qsint_docs*",
+    ) -> tuple[list[dict], int]:
+        """Multi-index document search for global Data Exploration.
+
+        Returns (docs, total_count).  Each doc includes ``_source_index`` so
+        the frontend knows which ES index the document came from (needed for
+        per-doc actions like enrich/status/labels that are keyed by datasource).
+        """
+        try:
+            filters = []
+            if sentiment_filter:
+                filters.append({"term": {"sentiment.keyword": sentiment_filter}})
+            if date_from or date_to:
+                range_clause: dict = {}
+                if date_from:
+                    range_clause["gte"] = date_from
+                if date_to:
+                    range_clause["lte"] = date_to
+                filters.append({"range": {"created_at": range_clause}})
+
+            if query:
+                q = query[:self._MAX_QUERY_LEN]
+                text_query = {"query_string": {"query": q, "default_operator": "AND"}}
+            else:
+                text_query = {"match_all": {}}
+
+            body_query = (
+                {"bool": {"must": text_query, "filter": filters}}
+                if filters
+                else text_query
+            )
+
+            body = {
+                "from": offset,
+                "size": limit,
+                "_source": True,
+                "sort": [{"created_at": {"order": "desc", "unmapped_type": "date"}}],
+                "query": body_query,
+            }
+
+            resp = self._client.search(index=index_pattern, body=body)
+            hits = resp["hits"]["hits"]
+            total = resp["hits"]["total"]["value"]
+            docs = [
+                {"id": h["_id"], "_source_index": h["_index"], **h["_source"]}
+                for h in hits
+            ]
+            return docs, total
+        except Exception as e:
+            logger.error(f"[es] search_all_indices error: {e}")
+            return [], 0
+
+    def create_index(self, index_name: str, mapping: Optional[dict] = None) -> bool:
+        """Create a new index.  Returns True on success, False if already exists."""
+        try:
+            if self._client.indices.exists(index=index_name):
+                logger.info(f"[es] create_index: '{index_name}' already exists")
+                return False
+            body = mapping or {
+                "mappings": {
+                    "properties": {
+                        "text":           {"type": "text"},
+                        "title":          {"type": "text"},
+                        "content":        {"type": "text"},
+                        "source":         {"type": "keyword"},
+                        "platform":       {"type": "keyword"},
+                        "region":         {"type": "keyword"},
+                        "topic":          {"type": "keyword"},
+                        "sentiment":      {"type": "keyword"},
+                        "classification": {"type": "keyword"},
+                        "created_at":     {"type": "date"},
+                        "tags":           {"type": "keyword"},
+                    }
+                }
+            }
+            self._client.indices.create(index=index_name, body=body)
+            logger.info(f"[es] Created investigation index '{index_name}'")
+            return True
+        except Exception as e:
+            logger.error(f"[es] create_index error for '{index_name}': {e}")
+            raise
+
+    def copy_documents(
+        self,
+        source_indices: list[str],
+        query_body: dict,
+        dest_index: str,
+        batch_size: int = 500,
+    ) -> int:
+        """Scroll through source_indices matching query_body and bulk-index into dest_index.
+
+        Returns the total number of documents copied.
+        """
+        from elasticsearch import helpers as es_helpers
+
+        total_copied = 0
+        scroll_id = None
+        try:
+            resp = self._client.search(
+                index=",".join(source_indices) if source_indices else "qsint_docs*",
+                body={**query_body, "size": batch_size},
+                scroll="2m",
+            )
+            scroll_id = resp.get("_scroll_id")
+
+            while True:
+                hits = resp["hits"]["hits"]
+                if not hits:
+                    break
+
+                actions = [
+                    {
+                        "_index": dest_index,
+                        "_id":    h["_id"],
+                        "_source": h["_source"],
+                    }
+                    for h in hits
+                ]
+                success, _ = es_helpers.bulk(self._client, actions, raise_on_error=False)
+                total_copied += success
+
+                if not scroll_id:
+                    break
+                resp = self._client.scroll(scroll_id=scroll_id, scroll="2m")
+                scroll_id = resp.get("_scroll_id")
+
+        finally:
+            if scroll_id:
+                try:
+                    self._client.clear_scroll(scroll_id=scroll_id)
+                except Exception:
+                    pass
+
+        # Refresh so newly indexed docs are immediately searchable
+        try:
+            self._client.indices.refresh(index=dest_index)
+        except Exception as e:
+            logger.warning(f"[es] refresh failed for '{dest_index}': {e}")
+
+        logger.info(f"[es] Copied {total_copied} docs → '{dest_index}'")
+        return total_copied
+
+    def delete_index(self, index_name: str) -> bool:
+        """Delete an index.  Returns True if deleted, False if not found."""
+        try:
+            if not self._client.indices.exists(index=index_name):
+                return False
+            self._client.indices.delete(index=index_name)
+            logger.info(f"[es] Deleted index '{index_name}'")
+            return True
+        except Exception as e:
+            logger.error(f"[es] delete_index error for '{index_name}': {e}")
+            return False
