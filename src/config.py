@@ -32,7 +32,7 @@ class Config:
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     # Hard wall-clock timeout for a single LLM API call (seconds).
     # Ollama can hang indefinitely on model load or OOM — this unblocks the worker.
-    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "420"))
+    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "240"))
 
     # num_ctx (context window) used for chat sessions.
     # If not set in environment, LLMClient will discover it from the model.

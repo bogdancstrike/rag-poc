@@ -77,7 +77,8 @@ class LLMClient:
             
             logger.info(
                 f"[llm] Dynamically discovered model: {self._model} "
-                f"(Context: {self._ctx_limit} tokens, temperature={self._temperature})"
+                f"(Context: {self._ctx_limit} tokens, temperature={self._temperature}, "
+                f"timeout={Config.LLM_TIMEOUT}s)"
             )
             
             # Update Config global so other modules (PromptBuilder) can use it
@@ -109,6 +110,7 @@ class LLMClient:
                     messages=full_messages,
                     temperature=self._temperature,
                     stream=False,
+                    timeout=Config.LLM_TIMEOUT,
                 )
                 content = resp.choices[0].message.content or ""
                 content = _strip_think_blocks(content)
@@ -133,6 +135,7 @@ class LLMClient:
                     messages=full_messages,
                     temperature=self._temperature,
                     stream=True,
+                    timeout=Config.LLM_TIMEOUT,
                 )
             except Exception as e:
                 logger.error(f"[llm] stream error: {e}", exc_info=True)
@@ -170,6 +173,7 @@ class LLMClient:
                     temperature=0.0,
                     stream=False,
                     response_format={"type": "json_object"},
+                    timeout=Config.LLM_TIMEOUT,
                 )
                 content = resp.choices[0].message.content or "{}"
                 content = _strip_think_blocks(content)
