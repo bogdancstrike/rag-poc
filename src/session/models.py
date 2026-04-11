@@ -320,10 +320,15 @@ def get_engine():
             stuck in a broken transaction (PGRES_TUPLES_OK error). This ping runs
             on every checkout and raises DisconnectionError to force pool recycling.
             """
+            cursor = dbapi_conn.cursor()
             try:
-                dbapi_conn.cursor().execute("SELECT 1")
+                cursor.execute("SELECT 1")
+                cursor.fetchone()   # must consume the result row or libpq keeps
+                                    # PGRES_TUPLES_OK pending, corrupting next query
             except Exception:
                 raise sa_exc.DisconnectionError()
+            finally:
+                cursor.close()
 
     return _engine
 

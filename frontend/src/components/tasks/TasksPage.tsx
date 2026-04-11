@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import {
   Table, Tag, Button, Space, Tooltip, Popconfirm, Typography, Badge,
   Select, Segmented, DatePicker, Row, Col, Card, Statistic, theme,
@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons'
 import type { ColumnsType, SortOrder, FilterDropdownProps } from 'antd/es/table/interface'
 import type { InputRef } from 'antd'
+import { useSearchParams } from 'react-router-dom'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -106,15 +107,44 @@ interface Props {
 export function TasksPage({ onViewTask }: Props) {
   const { token } = theme.useToken()
   const { data: indices } = useIndices()
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  const [filters, setFilters] = useState<TaskFilters>({
-    sort: 'updated_at:desc',
-    page: 1,
-    size: 50,
-  })
+  // Initialise from URL so refresh / shared links restore the same view
+  const [filters, setFilters] = useState<TaskFilters>(() => ({
+    sort:           searchParams.get('sort')     || 'updated_at:desc',
+    page:           Number(searchParams.get('page'))  || 1,
+    size:           Number(searchParams.get('size'))  || 50,
+    status:         (searchParams.get('status')   as TaskStatus)   || undefined,
+    category:       (searchParams.get('category') as TaskCategory) || undefined,
+    datasource:     searchParams.get('ds')       || undefined,
+    task_type:      searchParams.get('type')     || undefined,
+    created_after:  searchParams.get('after')    || undefined,
+    created_before: searchParams.get('before')   || undefined,
+  }))
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
-  const [showAnalytics, setShowAnalytics] = useState(false)
+  const [showAnalytics, setShowAnalytics] = useState(() => searchParams.get('analytics') === '1')
   const searchInputRef = useRef<InputRef>(null)
+
+  // Keep URL in sync whenever filters or analytics panel visibility changes
+  useEffect(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      const set = (k: string, v: string | undefined) =>
+        v ? next.set(k, v) : next.delete(k)
+
+      set('sort',     filters.sort !== 'updated_at:desc' ? filters.sort : undefined)
+      set('page',     filters.page && filters.page > 1   ? String(filters.page) : undefined)
+      set('size',     filters.size && filters.size !== 50 ? String(filters.size) : undefined)
+      set('status',   filters.status)
+      set('category', filters.category)
+      set('ds',       filters.datasource)
+      set('type',     filters.task_type)
+      set('after',    filters.created_after)
+      set('before',   filters.created_before)
+      set('analytics', showAnalytics ? '1' : undefined)
+      return next
+    }, { replace: true })
+  }, [filters, showAnalytics])
 
   const { data, isLoading, error, refetch, isFetching } = useTasks(filters)
   const restartMut = useRestartTask()

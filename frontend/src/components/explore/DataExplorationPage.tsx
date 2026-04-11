@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   Button, Space, Typography, Tag, Tooltip, message, theme,
 } from 'antd'
 import {
   FilterOutlined, BookOutlined, ClearOutlined,
 } from '@ant-design/icons'
+import { useSearchParams } from 'react-router-dom'
 import { DataTable } from './DataTable'
 import { AdvancedSearchPanel, type AdvancedSearchState } from './AdvancedSearchPanel'
 import { SavedSearchesDrawer } from './SavedSearchesDrawer'
@@ -17,15 +18,54 @@ const { Text } = Typography
 
 const EMPTY_SEARCH: AdvancedSearchState = { query: '' }
 
+/** Read AdvancedSearchState from URL search params */
+function stateFromParams(p: URLSearchParams): AdvancedSearchState {
+  return {
+    query:          p.get('q')           || '',
+    sentiment:      p.get('sentiment')   || undefined,
+    status:         p.get('status')      || undefined,
+    classification: p.get('class')       || undefined,
+    labels:         p.get('labels')      ? p.get('labels')!.split(',')       : undefined,
+    date_from:      p.get('from')        || undefined,
+    date_to:        p.get('to')          || undefined,
+    index_patterns: p.get('idx_patterns') ? p.get('idx_patterns')!.split(',') : undefined,
+  }
+}
+
 export function DataExplorationPage() {
   const { token } = theme.useToken()
   const { data: indices = [] } = useIndices()
   const createSearch = useCreateSearch()
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  const [searchState, setSearchState] = useState<AdvancedSearchState>(EMPTY_SEARCH)
-  const [appliedState, setAppliedState] = useState<AdvancedSearchState>(EMPTY_SEARCH)
+  // Initialise from URL so refresh / shared links restore the same filters
+  const [appliedState, setAppliedState] = useState<AdvancedSearchState>(() => stateFromParams(searchParams))
+  const [searchState, setSearchState]   = useState<AdvancedSearchState>(() => stateFromParams(searchParams))
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showSaved, setShowSaved] = useState(false)
+
+  // Sync applied filters to URL whenever they change
+  useEffect(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      const set = (k: string, v: string | undefined) =>
+        v ? next.set(k, v) : next.delete(k)
+
+      // Remove all search-related params first then re-add non-empty ones
+      ;['q', 'sentiment', 'status', 'class', 'labels', 'from', 'to', 'idx_patterns']
+        .forEach((k) => next.delete(k))
+
+      set('q',            appliedState.query || undefined)
+      set('sentiment',    appliedState.sentiment)
+      set('status',       appliedState.status)
+      set('class',        appliedState.classification)
+      set('labels',       appliedState.labels?.length ? appliedState.labels.join(',') : undefined)
+      set('from',         appliedState.date_from)
+      set('to',           appliedState.date_to)
+      set('idx_patterns', appliedState.index_patterns?.length ? appliedState.index_patterns.join(',') : undefined)
+      return next
+    }, { replace: true })
+  }, [appliedState])
 
   const handleApply = useCallback(() => {
     setAppliedState(searchState)
@@ -190,6 +230,7 @@ export function DataExplorationPage() {
           controlledQuery={appliedState.query}
           controlledFilters={dtFilters}
           showSourceIndex
+          enableUrlSync
         />
       </div>
 

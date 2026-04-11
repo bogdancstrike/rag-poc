@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Table, Input, Card, Typography, Space, Tooltip, Tag, Button, Divider,
   Row, Col, Spin, Alert, Badge, theme, Select, Collapse,
@@ -832,11 +833,17 @@ interface Props {
   controlledFilters?: DocumentFilters
   /** Show the source index column (useful in global explore view) */
   showSourceIndex?: boolean
+  /**
+   * Sync selected document to URL query params (?doc=&idx=).
+   * Enables deep-linking: refreshing or sharing the URL reopens the same document.
+   * `idx` param is only written when datasource is empty (global explore mode).
+   */
+  enableUrlSync?: boolean
 }
 
 export function DataTable({
   datasource, initialDocId, onDocSelect, onSendToRag,
-  controlledQuery, controlledFilters, showSourceIndex,
+  controlledQuery, controlledFilters, showSourceIndex, enableUrlSync,
 }: Props) {
   const { token } = theme.useToken()
   const [internalQuery, setInternalQuery] = useState('')
@@ -848,6 +855,11 @@ export function DataTable({
   const [selectedRows, setSelectedRows] = useState<Document[]>([])
   const [showFilters, setShowFilters] = useState(false)
   const [internalFilters, setInternalFilters] = useState<DocumentFilters>({})
+
+  // URL sync — read ?doc= and ?idx= on first render
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlDocId  = enableUrlSync ? (searchParams.get('doc') ?? undefined) : undefined
+  const urlDocIdx = enableUrlSync ? (searchParams.get('idx') ?? undefined) : undefined
 
   // Controlled mode: use externally provided state, fall back to internal
   const query   = controlledQuery   !== undefined ? controlledQuery   : internalQuery
@@ -871,20 +883,42 @@ export function DataTable({
     [labelsMap],
   )
 
-  // Fetch the pinned document when navigating directly to /explore/:index/:docId
-  const { data: pinnedDoc } = useDocumentById(datasource, initialDocId)
+  // Fetch pinned doc — supports both legacy initialDocId prop and URL ?doc= param.
+  // In global explore mode (datasource=""), use ?idx= as the actual ES index.
+  const pinnedDocId = urlDocId ?? initialDocId
+  const pinnedDatasource = datasource || urlDocIdx || ''
+  const { data: pinnedDoc } = useDocumentById(pinnedDatasource, pinnedDocId)
 
-  // Open the pinned doc whenever the resolved ID changes (handles "Go to doc" from other tabs)
+  // Open the pinned doc whenever the resolved ID changes
   useEffect(() => {
     if (pinnedDoc && pinnedDoc.id !== expandedDoc?.id) {
       setExpandedDoc(pinnedDoc)
     }
   }, [pinnedDoc?.id])
 
-  // Helper: change expanded doc and notify parent so URL stays in sync
+  // Helper: change expanded doc, notify parent, and sync URL params when enabled
   const selectDoc = (doc: Document | null) => {
     setExpandedDoc(doc)
     onDocSelect?.(doc)
+    if (enableUrlSync) {
+      if (doc) {
+        const idx = (doc as any)._source_index || datasource
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('doc', doc.id)
+          if (idx) next.set('idx', idx)
+          else next.delete('idx')
+          return next
+        }, { replace: true })
+      } else {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev)
+          next.delete('doc')
+          next.delete('idx')
+          return next
+        }, { replace: true })
+      }
+    }
   }
 
   const handleSearch = (value: string) => {

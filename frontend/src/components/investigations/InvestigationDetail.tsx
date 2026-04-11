@@ -6,7 +6,7 @@ import {
   TableOutlined, BulbOutlined, MessageOutlined,
   ArrowLeftOutlined, LoadingOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useInvestigation } from '@/hooks/useInvestigations'
 import { DataTable } from '@/components/explore/DataTable'
 import { InsightsPanel } from '@/components/insights/InsightsPanel'
@@ -20,12 +20,19 @@ interface Props {
   id: string
 }
 
+const VALID_TABS = ['data', 'insights', 'chat'] as const
+type TabKey = typeof VALID_TABS[number]
+
 export function InvestigationDetail({ id }: Props) {
   const navigate = useNavigate()
   const { token } = theme.useToken()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { data: investigation, isLoading, error } = useInvestigation(id)
 
-  const [activeTab, setActiveTab] = useState<'data' | 'insights' | 'chat'>('data')
+  const [activeTab, setActiveTab] = useState<TabKey>(() => {
+    const t = searchParams.get('tab') as TabKey | null
+    return t && VALID_TABS.includes(t) ? t : 'data'
+  })
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
   const { pendingQuery: storePending, setPendingQuery: setStorePending } = useSessionStore()
 
@@ -34,13 +41,23 @@ export function InvestigationDetail({ id }: Props) {
     if (storePending) {
       setPendingQuery(storePending)
       setStorePending(null)
-      setActiveTab('chat')
+      switchTab('chat')
     }
   }, [storePending])
 
+  const switchTab = (tab: TabKey) => {
+    setActiveTab(tab)
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (tab === 'data') next.delete('tab')   // 'data' is default — keep URL clean
+      else next.set('tab', tab)
+      return next
+    }, { replace: true })
+  }
+
   const handleAskAbout = (q: string) => {
     setPendingQuery(q)
-    setActiveTab('chat')
+    switchTab('chat')
   }
 
   if (isLoading) {
@@ -159,7 +176,7 @@ export function InvestigationDetail({ id }: Props) {
       ),
       children: (
         <div style={{ height: 'calc(100vh - 152px)', padding: 16, overflowY: 'auto' }}>
-          <DataTable datasource={inv.index_name} />
+          <DataTable datasource={inv.index_name} enableUrlSync />
         </div>
       ),
     },
@@ -205,7 +222,7 @@ export function InvestigationDetail({ id }: Props) {
       {header}
       <Tabs
         activeKey={activeTab}
-        onChange={(k) => setActiveTab(k as 'data' | 'insights' | 'chat')}
+        onChange={(k) => switchTab(k as TabKey)}
         items={tabItems}
         style={{ flex: 1 }}
         tabBarStyle={{
