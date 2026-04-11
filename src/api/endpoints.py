@@ -704,6 +704,7 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
                 row.status = "processing"
                 row.started_at = datetime.now(timezone.utc)
                 db.commit()
+                logger.info(f"[enrich] Document {doc_id} status → processing")
     except Exception as e:
         logger.error(f"[enrich] DB pre-update failed: {e}")
         return

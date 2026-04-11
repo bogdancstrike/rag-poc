@@ -137,17 +137,11 @@ class InsightsEngine:
 
             if needs_refresh:
                 logger.info(f"[insights] Scheduling coordinator for {datasource} (forced={force_refresh})")
-                # Immediately mark tasks as pending so the frontend sees activity
-                all_tasks = [
-                    "trending_signals", "relationship_network", "active_narratives", "hot_topics_sentiment",
-                    "corpus_statistics", "top_regions", "top_entities", "top_platforms"
-                ]
-                for ttype in all_tasks:
-                    self._set_task_status(datasource, ttype, "pending", "coordinator_scheduled",
-                                          clear_data=force_refresh)
+
                 # Route the coordinator through Kafka (or daemon thread fallback)
                 from src.worker.kafka_producer import publish_task
                 publish_task({"task_type": "insight_coordinator", "datasource": datasource})
+
                 current_insights = self._load_all_from_cache(datasource)
                 span.set_attribute("insights.refresh_triggered", True)
             else:
@@ -375,6 +369,7 @@ class InsightsEngine:
                     row.sample_hash = sample_hash
                     if status == "processing":
                         row.started_at = now
+                        logger.info(f"[insights] Task {ttype} status → {status} (hash={sample_hash[:8]})")
                     
                     if clear_data:
                         row.payload = None
