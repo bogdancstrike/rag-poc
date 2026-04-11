@@ -119,6 +119,29 @@ class TestBuildInsightsMessages:
         # The user message content embeds the task-specific schema — should differ by type
         assert msgs_summary[0]["content"] != msgs_graph[0]["content"]
 
+    def test_graph_task_uses_smaller_input_budget(self, builder):
+        # Create many large documents to exceed the 32k token budget
+        # but stay within the default context window budget.
+        # Approx 3.5 chars per token (Config.LLM_CHARS_PER_TOKEN)
+        # 32k tokens is ~112k chars.
+        # We explicitly set context window to 64k for this test to ensure
+        # summary budget (56k) > graph budget (32k).
+        from src.config import Config
+        old_ctx = Config.LLM_INSIGHTS_CTX
+        Config.LLM_INSIGHTS_CTX = 65536
+        
+        try:
+            large_text = "A" * 5000
+            docs = [{"id": f"d{i}", "text": large_text, "score": 1.0} for i in range(100)]
+        
+            msgs_summary, _ = builder.build_insights_messages(docs, task_type="summary")
+            msgs_graph, _   = builder.build_insights_messages(docs, task_type="graph")
+        
+            # Summary should have more content than graph because it has a larger budget
+            assert len(msgs_summary[0]["content"]) > len(msgs_graph[0]["content"])
+        finally:
+            Config.LLM_INSIGHTS_CTX = old_ctx
+
     def test_empty_docs_still_returns_valid_structure(self, builder):
         messages, system = builder.build_insights_messages([])
         assert isinstance(messages, list)

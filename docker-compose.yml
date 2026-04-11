@@ -76,14 +76,38 @@ services:
               capabilities: [gpu]
     environment:
       - OLLAMA_KEEP_ALIVE=24h
-      - OLLAMA_NUM_PARALLEL=2
+      - OLLAMA_NUM_PARALLEL=3
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b-instruct}
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags > /dev/null"]
+      test: ["CMD-SHELL", "ollama list > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 15s
     restart: unless-stopped
+
+  # ── Model Puller (Ensures LLM_MODEL is downloaded and configured) ─────────
+  ollama-pull-model:
+    image: ollama/ollama:latest
+    container_name: qsint-rag-ollama-puller
+    networks: [ragnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b-instruct}
+    # 1. Pull base model
+    # 2. Create/Overwrite the model tag with 64k context and 8k response limits
+    command: >
+      "echo 'Pulling $LLM_MODEL...' && 
+       ollama pull $LLM_MODEL && 
+       echo 'Configuring $LLM_MODEL with 64k context...' && 
+       echo \"FROM $LLM_MODEL\" > Modelfile && 
+       echo \"PARAMETER num_ctx 65536\" >> Modelfile && 
+       echo \"PARAMETER num_predict 8192\" >> Modelfile && 
+       ollama create $LLM_MODEL -f Modelfile"
 
   # ── Jaeger (OTLP tracing) ───────────────────────────────────────────────────
   jaeger:
@@ -193,48 +217,3 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Backend ─────────────────────────────────────────────────────────────────
-#  backend:
-#    build:
-#      context: .
-#      dockerfile: Dockerfile
-#    container_name: qsint-rag-backend
-#    networks: [ragnet]
-#    ports:
-#      - "${API_PORT:-5100}:5100"
-#    env_file: .env
-#    environment:
-#      DATABASE_URL: "postgresql://${POSTGRES_USER:-qf}:${POSTGRES_PASSWORD:-qf}@postgres:5432/${POSTGRES_DB:-qsint_rag}"
-#      ES_HOST: "http://elasticsearch:9200"
-#      LLM_BASE_URL: "http://ollama:11434/v1"
-#      QSINT_OTLP_ENDPOINT: "http://jaeger:4317"
-#      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
-#      REDIS_HOST: "redis"
-#      LLM_PARALLEL: "${LLM_PARALLEL:-2}"
-#    depends_on:
-#      postgres:
-#        condition: service_healthy
-#      elasticsearch:
-#        condition: service_healthy
-#      ollama:
-#        condition: service_healthy
-#      kafka:
-#        condition: service_healthy
-#    restart: unless-stopped
-#
-#  # ── Frontend (dev) ──────────────────────────────────────────────────────────
-#  frontend:
-#    build:
-#      context: ./frontend
-#      dockerfile: Dockerfile.dev
-#    container_name: qsint-rag-frontend
-#    networks: [ragnet]
-#    ports:
-#      - "${FRONTEND_PORT:-5173}:5173"
-#    environment:
-#      VITE_API_BASE_URL: "http://localhost:${API_PORT:-5100}"
-#    volumes:
-#      - ./frontend/src:/app/src:ro
-#    depends_on:
-#      - backend
-#    restart: unless-stopped

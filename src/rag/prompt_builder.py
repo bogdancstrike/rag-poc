@@ -132,7 +132,7 @@ FORMAT RULES:
    - "law"      (LAW)
    - "fac"      (FAC)
    No other type values are permitted.
-4. Aim for 20–50 nodes and 40–100 edges ONLY IF the source material supports it. Every node MUST have at least 2 edges; otherwise drop it.
+4. Aim for 15–25 nodes and 20–40 edges ONLY IF the source material supports it. Every node MUST have at least 2 edges; otherwise drop it. Prioritise the most central entities; omit isolated nodes to keep the graph sparse but meaningful.
 5. Assign each node a "community" integer (0-based). Nodes in the same community share a dominant theme, actor group, campaign, incident, or storyline as evidenced by the documents. Aim for 4–10 distinct communities, but only as many as the data genuinely supports.
 6. The JSON must have EXACTLY this structure:
 {
@@ -160,7 +160,7 @@ INSIGHTS_GRAPH_SCHEMA = """{
 INSIGHTS_GRAPH_RULES = """Rules (read INSIGHTS_GRAPH_PROMPT for full NER+graph instructions):
 - Extract named entities (people, orgs, locations, events, products, dates…) from the corpus.
 - Build a community knowledge graph: nodes = entities, edges = relationships stated in the text.
-- 20–50 nodes, 40–100 edges (only if the corpus supports it — do not pad with invented data).
+- 15–25 nodes, 20–40 edges (only if the corpus supports it — do not pad with invented data).
 - Every node must have at least 2 edges. Every edge must match a relationship from the text.
 - "source" and "target" must match node "id" values exactly.
 - Assign community integers (0-based) grouping nodes that share a theme/actor/storyline.
@@ -458,9 +458,16 @@ class PromptBuilder:
         # Calculate the total window in tokens
         total_window_tokens = Config.LLM_INSIGHTS_CTX
 
-        # Reserve 8,000 tokens for the LLM's output response
+        # Reserve tokens for the LLM's output response
         RESPONSE_RESERVE_TOKENS = 8000
-        input_budget_tokens = total_window_tokens - RESPONSE_RESERVE_TOKENS
+
+        if task_type == "graph":
+            # For graph extraction, we use a smaller input context (32k tokens)
+            # to ensure the model doesn't time out during reasoning/generation.
+            # We cap it by the total window to avoid overflow.
+            input_budget_tokens = min(32000, total_window_tokens - RESPONSE_RESERVE_TOKENS)
+        else:
+            input_budget_tokens = total_window_tokens - RESPONSE_RESERVE_TOKENS
 
         # Convert the token budget to characters
         # Note: If LLM_CHARS_PER_TOKEN is 4, but your data is dense (JSON/Special Chars),

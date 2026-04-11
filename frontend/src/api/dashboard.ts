@@ -32,8 +32,29 @@ export interface TaskOverview {
   enrichments: EnrichmentTask[]
 }
 
+export interface LLMStats {
+  modelfile: string
+  parameters: string
+  template: string
+  details: {
+    parent_model: string
+    format: string
+    family: string
+    families: string[]
+    parameter_size: string
+    quantization_level: string
+  }
+  model_info?: Record<string, any>
+  error?: string
+}
+
 export const fetchDashboardTasks = async (): Promise<TaskOverview> => {
   const { data } = await apiClient.get<TaskOverview>('/v1/dashboard/tasks')
+  return data
+}
+
+export const fetchLLMStats = async (): Promise<LLMStats> => {
+  const { data } = await apiClient.get<LLMStats>('/v1/llm/stats')
   return data
 }
 

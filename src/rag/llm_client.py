@@ -34,34 +34,79 @@ class LLMClient:
             api_key="ollama",  # dummy key — Ollama doesn't validate it
             timeout=Config.LLM_TIMEOUT,
         )
-        self._model       = Config.LLM_MODEL
-        self._max_tokens  = Config.LLM_MAX_TOKENS
+        self._model = None
+        self._ctx_limit = 4096  # safe fallback
         self._temperature = Config.LLM_TEMPERATURE
+        
+        self._discover_model()
+
+    @property
+    def model_name(self) -> str:
+        return self._model or "unknown"
+
+    def _discover_model(self):
+        """Query Ollama to find the active model and its context window."""
+        import requests
+        try:
+            # 1. Find the model name
+            tags_url = Config.LLM_BASE_URL.replace("/v1", "/api/tags")
+            resp = requests.get(tags_url, timeout=5)
+            resp.raise_for_status()
+            models = resp.json().get("models", [])
+            
+            if not models:
+                logger.error("[llm] No models found on Ollama server.")
+                return
+
+            # Preference: use the one that was likely orchestrated or the most recent
+            # (We look for qwen2.5:3b-instruct which we pull in docker-compose)
+            orchestrated = [m["name"] for m in models if "instruct" in m["name"].lower()]
+            self._model = orchestrated[0] if orchestrated else models[0]["name"]
+
+            # 2. Find the context window
+            info_url = Config.LLM_BASE_URL.replace("/v1", "/api/show")
+            info_resp = requests.post(info_url, json={"name": self._model}, timeout=5)
+            info_resp.raise_for_status()
+            info = info_resp.json()
+            
+            # Parse num_ctx from modelfile: "PARAMETER num_ctx 65536"
+            modelfile = info.get("modelfile", "")
+            match = re.search(r"num_ctx\s+(\d+)", modelfile)
+            if match:
+                self._ctx_limit = int(match.group(1))
+            
+            logger.info(
+                f"[llm] Dynamically discovered model: {self._model} "
+                f"(Context: {self._ctx_limit} tokens, temperature={self._temperature})"
+            )
+            
+            # Update Config global so other modules (PromptBuilder) can use it
+            if Config.LLM_INSIGHTS_CTX == 0:
+                Config.LLM_INSIGHTS_CTX = self._ctx_limit
+            if Config.LLM_CHAT_CTX == 0:
+                Config.LLM_CHAT_CTX = min(self._ctx_limit, 16384)
+
+        except Exception as e:
+            logger.error(f"[llm] Dynamic discovery failed: {e}")
+            # Fallback to a sensible default if discovery fails
+            self._model = "qwen2.5:3b-instruct"
+            if Config.LLM_INSIGHTS_CTX == 0: Config.LLM_INSIGHTS_CTX = 4096
+            if Config.LLM_CHAT_CTX == 0:     Config.LLM_CHAT_CTX = 4096
 
     # ── Synchronous completion ──────────────────────────────────────────────────
 
-    def complete(self, messages: list[dict], system: str = "") -> str:
-        """Send messages to the LLM and return the full response text.
-
-        Args:
-            messages: List of {'role': ..., 'content': ...} dicts.
-            system:   Optional system prompt prepended as a system message.
-
-        Returns:
-            The assistant's reply as a plain string.
-        """
+    def complete(self, messages: list[dict], system: str = "", num_ctx: int | None = None) -> str:
+        """Send messages to the LLM and return the full response text."""
         if "qwen3" in self._model.lower():
             system = (system.rstrip() + "\n/no_think") if system else "/no_think"
         full_messages = self._build_messages(messages, system)
         with tracer.start_as_current_span("llm.complete") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
-            span.set_attribute("llm.max_tokens", self._max_tokens)
             try:
                 resp = self._client.chat.completions.create(
                     model=self._model,
                     messages=full_messages,
-                    max_tokens=self._max_tokens,
                     temperature=self._temperature,
                     stream=False,
                 )
@@ -76,15 +121,8 @@ class LLMClient:
 
     # ── Streaming ───────────────────────────────────────────────────────────────
 
-    def stream(self, messages: list[dict], system: str = "") -> Generator[str, None, None]:
-        """Stream the LLM response as text delta chunks.
-
-        Uses create(stream=True) which yields ChatCompletionChunk objects
-        with choices[0].delta.content.
-
-        Note: the caller (chat_stream_handler) wraps the generator in its own
-        llm_span — this span covers the initial API call setup only.
-        """
+    def stream(self, messages: list[dict], system: str = "", num_ctx: int | None = None) -> Generator[str, None, None]:
+        """Stream the LLM response as text delta chunks."""
         full_messages = self._build_messages(messages, system)
         with tracer.start_as_current_span("llm.stream.setup") as span:
             span.set_attribute("llm.model", self._model)
@@ -93,7 +131,6 @@ class LLMClient:
                 stream = self._client.chat.completions.create(
                     model=self._model,
                     messages=full_messages,
-                    max_tokens=self._max_tokens,
                     temperature=self._temperature,
                     stream=True,
                 )
@@ -119,33 +156,20 @@ class LLMClient:
         num_ctx: int | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """Request a JSON response. Returns raw string — caller parses it.
-
-        Args:
-            num_ctx:    Ollama context window override. Pass Config.LLM_INSIGHTS_CTX
-                        for intelligence generation; leave None for enrichment tasks
-                        (defaults to 8 192, which is plenty for a single document).
-            max_tokens: Output token limit override. Defaults to LLM_JSON_MAX_TOKENS.
-        """
+        """Request a JSON response. Returns raw string — caller parses it."""
         if "qwen3" in self._model.lower():
             system = (system.rstrip() + "\n/no_think") if system else "/no_think"
         full_messages = self._build_messages(messages, system)
-        ctx       = num_ctx    or 8192                    # small default for enrichment
-        out_limit = max_tokens or Config.LLM_JSON_MAX_TOKENS
         with tracer.start_as_current_span("llm.complete_json") as span:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
-            span.set_attribute("llm.num_ctx", ctx)
-            span.set_attribute("llm.max_tokens", out_limit)
             try:
                 resp = self._client.chat.completions.create(
                     model=self._model,
                     messages=full_messages,
-                    max_tokens=out_limit,
                     temperature=0.0,
                     stream=False,
                     response_format={"type": "json_object"},
-                    extra_body={"options": {"num_ctx": ctx}},
                 )
                 content = resp.choices[0].message.content or "{}"
                 content = _strip_think_blocks(content)
@@ -155,6 +179,22 @@ class LLMClient:
                 logger.error(f"[llm] complete_json error: {e}", exc_info=True)
                 span.set_attribute("llm.error", str(e))
                 raise
+
+    # ── Model Information ──────────────────────────────────────────────────────
+
+    def get_model_info(self) -> dict:
+        """Fetch detailed model information from Ollama's /api/show endpoint."""
+        import requests
+        try:
+            # We use the base_url but need to call /api/show instead of /v1/chat/completions
+            # base_url is usually http://localhost:11434/v1
+            url = Config.LLM_BASE_URL.replace("/v1", "/api/show")
+            resp = requests.post(url, json={"name": self._model}, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"[llm] Failed to fetch model info: {e}")
+            return {"error": str(e), "model": self._model}
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -116,21 +116,24 @@ def health_check(app, operation, request, **kwargs):
         retriever = get_retriever()
         ds_status = retriever.get_status()
 
+        llm = get_llm()
         llm_ok = True
+        model_name = llm.model_name
         try:
-            get_llm()
+            # check if reachable
+            llm.get_model_info()
         except Exception:
             llm_ok = False
 
         ok = ds_status.get("error") is None and llm_ok
         span.set_attribute("health.ok", ok)
         span.set_attribute("health.datasource_type", ds_status.get("type", "unknown"))
-        span.set_attribute("health.llm_model", Config.LLM_MODEL)
+        span.set_attribute("health.llm_model", model_name)
 
         body = {
             "status":     "ok" if ok else "degraded",
             "datasource": ds_status,
-            "llm":        {"model": Config.LLM_MODEL, "ok": llm_ok},
+            "llm":        {"model": model_name, "ok": llm_ok},
         }
         return body, (200 if ok else 503)
 
@@ -138,6 +141,17 @@ def health_check(app, operation, request, **kwargs):
 def liveness(app, operation, request, **kwargs):
     """GET /liveness — lightweight Kubernetes liveness probe."""
     return {"alive": True}, 200
+
+
+def llm_stats_handler(app, operation, request, **kwargs):
+    """GET /v1/llm/stats — fetch detailed model info from Ollama."""
+    try:
+        llm = get_llm()
+        info = llm.get_model_info()
+        return info, 200
+    except Exception as e:
+        logger.error(f"[api] Failed to fetch LLM stats: {e}")
+        return {"error": str(e)}, 500
 
 
 # ── Chat helpers ───────────────────────────────────────────────────────────────
@@ -350,10 +364,10 @@ def chat_stream_handler(app, operation, request, **kwargs):
         A child span wraps the full LLM stream so token latency is visible in Jaeger.
         """
         with tracer.start_as_current_span("api.chat_stream.llm") as llm_span:
-            llm_span.set_attribute("chat.session_id", session_id)
-            llm_span.set_attribute("llm.model", Config.LLM_MODEL)
-
             llm = get_llm()
+            llm_span.set_attribute("chat.session_id", session_id)
+            llm_span.set_attribute("llm.model", llm.model_name)
+
             accumulated = []
             delta_count = 0
 

@@ -29,24 +29,21 @@ class Config:
 
     # ── LLM (Ollama OpenAI-compatible API) ─────────────────────────────────────
     LLM_BASE_URL    = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
-    LLM_MODEL       = os.getenv("LLM_MODEL", "qwen3.5:9b")
-    LLM_MAX_TOKENS  = int(os.getenv("LLM_MAX_TOKENS", "4096"))
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     # Hard wall-clock timeout for a single LLM API call (seconds).
     # Ollama can hang indefinitely on model load or OOM — this unblocks the worker.
-    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "300"))
+    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "420"))
 
-    # ── Intelligence Report LLM settings ───────────────────────────────────────
+    # num_ctx (context window) used for chat sessions.
+    # If not set in environment, LLMClient will discover it from the model.
+    LLM_CHAT_CTX            = int(os.getenv("LLM_CHAT_CTX", "0"))
     # Ollama num_ctx (context window) used exclusively for insight generation.
-    # Larger = more documents analysed per run. Default 65536 (64 k tokens).
-    LLM_INSIGHTS_CTX        = int(os.getenv("LLM_INSIGHTS_CTX", "65536"))
-    # Max output tokens for the insights JSON response (graph + summary can be large).
-    LLM_INSIGHTS_MAX_TOKENS = int(os.getenv("LLM_INSIGHTS_MAX_TOKENS", "65536"))
-    # Conservative chars-per-token estimate used to convert token budget → char budget.
-    # 3.5 is safe for mixed English/non-English intelligence text.
+    LLM_INSIGHTS_CTX        = int(os.getenv("LLM_INSIGHTS_CTX", "0"))
+    # Max output tokens for the insights JSON response.
+    LLM_INSIGHTS_MAX_TOKENS = int(os.getenv("LLM_INSIGHTS_MAX_TOKENS", "4096"))
+    # Conservative chars-per-token estimate.
     LLM_CHARS_PER_TOKEN     = float(os.getenv("LLM_CHARS_PER_TOKEN", "3.5"))
-    # Characters reserved for prompts, JSON schema instructions, and LLM output space.
-    # The remainder (ctx_chars - reserve) is available for document content.
+    # Characters reserved for prompts and JSON schema.
     LLM_INSIGHTS_RESERVE_CHARS = int(os.getenv("LLM_INSIGHTS_RESERVE_CHARS", "10000"))
 
     # Enrichment (per-document) JSON context — smaller is fine, only one doc at a time.

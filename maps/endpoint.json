@@ -349,6 +349,17 @@
         "module_name": "api.endpoints",
         "method_name": "investigation_detail_handler"
       }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_llm_stats",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/llm/stats",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "llm_stats_handler"
+      }
     }
   ]
 }

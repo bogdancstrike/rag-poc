@@ -123,12 +123,13 @@ def _recover_dangling_tasks() -> None:
 
 
 def main():
+    from src.rag.llm_client import get_llm
+    llm = get_llm()
     logger.info(
         f"[QSINT-RAG] Starting — dev_mode={Config.DEV_MODE} "
-        f"datasource={Config.DATASOURCE_TYPE} "
-        f"llm_model={Config.LLM_MODEL} "
-        f"api_port={Config.API_PORT} "
-        f"llm_parallel={Config.LLM_PARALLEL}"
+        f"datasource={Config.DATASOURCE_TYPE} llm_model={llm.model_name} "
+        f"api_port={Config.API_PORT} llm_parallel={Config.LLM_PARALLEL}",
+        "magenta"
     )
 
     # Register signal handlers for clean shutdown

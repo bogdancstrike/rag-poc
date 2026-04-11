@@ -1,14 +1,16 @@
 import {
   Card, Col, Row, Typography, Tag, Space, Spin, Alert,
-  Button, Tooltip, Progress, theme, Statistic,
+  Button, Tooltip, Progress, theme, Statistic, Descriptions,
 } from 'antd'
 import {
   DashboardOutlined, CheckCircleOutlined, SyncOutlined, ClockCircleOutlined,
   WarningOutlined, RightOutlined, BulbOutlined, RobotOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useTasks } from '@/hooks/useTasks'
+import { useLLMStats } from '@/hooks/useLLMStats'
 
 dayjs.extend(utc)
 
@@ -21,6 +23,7 @@ interface Props {
 export function OverviewDashboard({ onGoToTasks }: Props) {
   const { token } = theme.useToken()
   const { data, isLoading, error } = useTasks({ size: 1 })
+  const { data: llmStats, isLoading: isLlmLoading } = useLLMStats()
   const stats = data?.stats
 
   if (isLoading) {
@@ -147,6 +150,46 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
             />
           </Col>
         </Row>
+      </Card>
+
+      {/* LLM Engine Details */}
+      <Card
+        size="small"
+        variant="borderless"
+        title={
+          <Space>
+            <SettingOutlined style={{ color: token.colorPrimary }} />
+            <span style={{ fontSize: 14 }}>LLM Engine Details</span>
+          </Space>
+        }
+        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+      >
+        {isLlmLoading ? (
+          <div style={{ textAlign: 'center', padding: 20 }}><Spin size="small" /></div>
+        ) : llmStats?.error ? (
+          <Alert type="warning" message="Could not fetch detailed model info" showIcon />
+        ) : (
+          <Descriptions column={{ xs: 1, sm: 2, md: 3, lg: 4 }} size="small" bordered>
+            <Descriptions.Item label="Model">
+              <Text strong>{llmStats?.details?.parent_model || 'Unknown'}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Parameters">
+              {llmStats?.details?.parameter_size}
+            </Descriptions.Item>
+            <Descriptions.Item label="Quantization">
+              <Tag color="processing">{llmStats?.details?.quantization_level}</Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="Context Window">
+              {llmStats?.modelfile?.match(/num_ctx\s+(\d+)/)?.[1] || '4096'} tokens
+            </Descriptions.Item>
+            <Descriptions.Item label="Family">
+              {llmStats?.details?.family}
+            </Descriptions.Item>
+            <Descriptions.Item label="Format">
+              {llmStats?.details?.format}
+            </Descriptions.Item>
+          </Descriptions>
+        )}
       </Card>
 
       {/* Go-to link */}
