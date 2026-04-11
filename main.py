@@ -182,7 +182,7 @@ def main():
             handles.app.run(
                 host=settings.api_host,
                 port=settings.api_port,
-                debug=Config.DEV_MODE,
+                debug=False,
             )
         except (KeyboardInterrupt, SystemExit):
             logger.info("[QSINT-RAG] Exiting")
