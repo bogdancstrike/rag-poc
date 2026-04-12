@@ -122,14 +122,13 @@ def discover_investigation(api: str) -> dict | None:
 def poll_enrichment(api: str, datasource: str, doc_id: str, timeout: float) -> tuple[str, float]:
     """Poll enrichment status until complete/error. Returns (status, elapsed_s)."""
     t0 = time.perf_counter()
+    task_id = f"enrichment__{datasource}__{doc_id}"
     while (elapsed := time.perf_counter() - t0) < timeout:
         try:
-            d = get(api, "/v1/documents/enrichments", {"datasource": datasource, "doc_id": doc_id})
-            enrichments = d.get("enrichments", [])
-            if enrichments:
-                status = enrichments[0].get("status", "unknown")
-                if status in ("complete", "error"):
-                    return status, elapsed
+            d = get(api, f"/v1/tasks/{task_id}")
+            status = d.get("status", "unknown")
+            if status in ("complete", "error"):
+                return status, elapsed
         except Exception as e:
             pass
         time.sleep(POLL_INTERVAL)
@@ -139,12 +138,11 @@ def poll_enrichment(api: str, datasource: str, doc_id: str, timeout: float) -> t
 def poll_insight_task(api: str, datasource: str, task: str, timeout: float) -> tuple[str, float]:
     """Poll insight task status until complete/error. Returns (status, elapsed_s)."""
     t0 = time.perf_counter()
+    task_id = f"insight__{datasource}__{task}"
     while (elapsed := time.perf_counter() - t0) < timeout:
         try:
-            d = get(api, "/v1/insights", {"datasource": datasource})
-            tasks = d.get("tasks", {})
-            t_data = tasks.get(task, {})
-            status = t_data.get("status", "unknown")
+            d = get(api, f"/v1/tasks/{task_id}")
+            status = d.get("status", "unknown")
             if status in ("complete", "error"):
                 return status, elapsed
         except Exception as e:

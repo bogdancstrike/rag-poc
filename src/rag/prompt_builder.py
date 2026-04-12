@@ -233,7 +233,6 @@ FORMAT RULES:
 6. "language": primary language code (e.g. "en", "ro", "fr", "ar", "ru").
 7. Do NOT include any other top-level keys.
 8. Stop immediately after the final '}'."""
-"""
 
 ENRICH_GRAPH_PROMPT = """Extract a knowledge graph of entities and their relationships from the document.
 Output ONLY valid JSON:
@@ -243,25 +242,29 @@ Output ONLY valid JSON:
     "edges": [{"source": "EntityName1", "target": "EntityName2", "relationship": "string", "weight": 0.8}]
   }
 }
-Aim for 5-15 nodes and 5-20 edges. source/target must match node ids exactly."""
+Aim for 5-15 nodes and 5-20 edges. source/target must match node ids exactly.
+Stop immediately after the final '}'."""
 
 ENRICH_TIMELINE_PROMPT = """Extract all temporal references from the document (dates, time periods, events with timestamps).
 Output ONLY valid JSON:
-{"timeline": [{"date": "string (as in document)", "description": "string (what happened)", "normalized": "ISO 8601 or null"}]}"""
+{"timeline": [{"date": "string (as in document)", "description": "string (what happened)", "normalized": "ISO 8601 or null"}]}
+Stop immediately after the final '}'."""
 
 ENRICH_LOCATIONS_PROMPT = """Extract all geographic locations mentioned in the document.
 Output ONLY valid JSON: {"locations": ["location name 1", "location name 2"]}
-List only distinct place names (cities, countries, regions). Do not include coordinates."""
+List only distinct place names (cities, countries, regions). Do not include coordinates.
+Stop immediately after the final '}'."""
 
 ENRICH_TRANSLATION_PROMPT = """Translate the text below into natural, fluent Romanian suitable for intelligence analysts.
 
 Rules:
 1. Output ONLY valid JSON with exactly this structure: {"text": "translation here"}
-2. Produce a complete, accurate translation — do NOT summarize or omit any content.
+2. Produce a complete, accurate translation - do NOT summarize or omit any content.
 3. Preserve proper nouns (names, organizations, locations) in their original form.
 4. Keep technical terms, acronyms, and codenames unchanged.
 5. If the source text is already in Romanian, return it verbatim in the "text" field.
-6. Do NOT add explanations, notes, or any text outside the JSON."""
+6. Do NOT add explanations, notes, or any text outside the JSON.
+7. Stop immediately after the final '}'."""
 
 class PromptBuilder:
     """Assembles LLM-ready messages from retrieved chunks + conversation history."""
@@ -269,8 +272,8 @@ class PromptBuilder:
     def build_enrichment_messages(self, document_text: str) -> tuple[list[dict], str]:
         """Build the messages list for full document enrichment (all fields at once).
 
-        Document text goes AFTER the schema so the model reads instruction → schema
-        → document in order. When thinking is suppressed (/no_think) the model
+        Document text goes AFTER the schema so the model reads instruction -> schema
+        -> document in order. When thinking is suppressed (/no_think) the model
         would otherwise interpret "Analyze the following document..." (embedded in
         the schema prompt) as a new instruction expecting more input, and reply with
         a "ready" template instead of performing the extraction.
