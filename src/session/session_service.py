@@ -304,12 +304,33 @@ def update_investigation_status(
 
 
 def delete_investigation(investigation_id: str) -> Optional[str]:
-    """Delete investigation DB row. Returns index_name so caller can delete ES index."""
+    """Delete investigation DB row and all associated tasks.
+
+    Deletes enrichment tasks and insight cache rows for the investigation's
+    index before removing the investigation row itself.
+    Returns index_name so caller can also drop the ES index.
+    """
+    from src.session.models import InsightsCache, DocumentEnrichment
     with get_db() as db:
         row = db.query(Investigation).filter(Investigation.id == investigation_id).first()
         if row is None:
             return None
         index_name = row.index_name
+
+        # Delete all enrichment tasks for this investigation index
+        enrichment_deleted = db.query(DocumentEnrichment).filter_by(
+            datasource=index_name
+        ).delete(synchronize_session=False)
+
+        # Delete all insight cache rows for this investigation index
+        insight_deleted = db.query(InsightsCache).filter_by(
+            datasource=index_name
+        ).delete(synchronize_session=False)
+
         db.delete(row)
-    logger.info(f"[investigation] Deleted {investigation_id} index={index_name}")
+
+    logger.info(
+        f"[investigation] Deleted {investigation_id} index={index_name} "
+        f"enrichment_tasks={enrichment_deleted} insight_tasks={insight_deleted}"
+    )
     return index_name
