@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from framework.commons.logger import logger
 from src.config import Config
-from src.worker.task_handlers import dispatch_task
+from src.worker.task_handlers import dispatch_task, mark_task_error
 
 # Watchdog deadline: a bit more than the LLM HTTP timeout so the HTTP client
 # has a chance to raise its own timeout first.
@@ -101,39 +101,13 @@ def _dispatch_llm(task: dict) -> None:
                 if not released.is_set():
                     released.set()
                     _llm_semaphore.release()
-                _mark_llm_error(task)
+                mark_task_error(task, f"Task timed out after {_LLM_TASK_TIMEOUT}s")
 
         worker = threading.Thread(target=_worker, daemon=True, name=f"llm-{task.get('task_type')}")
         worker.start()
         threading.Thread(target=_watchdog, daemon=True, name=f"llm-watchdog-{task.get('task_type')}").start()
 
     threading.Thread(target=_acquire_then_run, daemon=True, name="llm-acquirer").start()
-
-
-def _mark_llm_error(task: dict) -> None:
-    """Write 'error' status to DB for a timed-out LLM task."""
-    ttype = task.get("task_type", "")
-    ds    = task.get("datasource", "?")
-    err   = f"Task timed out after {_LLM_TASK_TIMEOUT}s"
-    try:
-        if ttype in ("insight_ai", "insight_stats"):
-            from src.rag.insights_engine import get_insights_engine
-            engine = get_insights_engine()
-            insight_type = task.get("insight_type", ttype)
-            engine._set_task_status(ds, insight_type, "error",
-                                    task.get("sample_hash", ""), error=err)
-        elif ttype in ("enrich_doc", "enrich_field"):
-            from src.session.models import DocumentEnrichment, get_db
-            with get_db() as db:
-                row = db.query(DocumentEnrichment).filter_by(
-                    doc_id=task.get("doc_id"), datasource=ds
-                ).first()
-                if row:
-                    row.status = "error"
-                    row.error  = err
-                    db.commit()
-    except Exception:
-        pass
 
 
 def _consumer_loop() -> None:

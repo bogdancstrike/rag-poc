@@ -472,6 +472,50 @@ class InsightsEngine:
         return None
 
     @staticmethod
+    def _auto_close_json(text: str) -> str:
+        """Attempt to close a truncated JSON string by balancing braces and brackets."""
+        text = text.strip()
+        if not text.startswith("{"):
+            return text
+        
+        # If it ends mid-string, close the quote
+        if text.count('"') % 2 != 0:
+            text += '"'
+            
+        stack = []
+        in_str = False
+        escape = False
+        
+        for ch in text:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch in "{[":
+                stack.append(ch)
+            elif ch in "}]":
+                if stack:
+                    opp = "{" if ch == "}" else "["
+                    if stack[-1] == opp:
+                        stack.pop()
+        
+        # Close remaining open structures in reverse order
+        while stack:
+            ch = stack.pop()
+            if ch == "{":
+                text += "}"
+            else:
+                text += "]"
+        return text
+
+    @staticmethod
     def _parse_json(raw: str) -> Optional[dict]:
         """Robustly extract a JSON object from LLM output.
 
@@ -480,6 +524,7 @@ class InsightsEngine:
         2. Fix trailing commas before } or ], retry json.loads.
         3. Remove // line comments (only when no :// URLs present), retry.
         4. Use brace-matching extractor to isolate the first { ... } block.
+        5. If still failing and starts with '{', attempt auto-closing (handles truncation).
         """
         if not raw:
             return None
@@ -492,6 +537,8 @@ class InsightsEngine:
 
         def _try(text: str) -> Optional[dict]:
             try:
+                # Basic cleanup before every attempt
+                text = re.sub(r",(\s*[}\]])", r"\1", text)
                 return InsightsEngine._extract_known_keys(json.loads(text))
             except (json.JSONDecodeError, ValueError):
                 return None
@@ -501,31 +548,31 @@ class InsightsEngine:
         if result is not None:
             return result
 
-        # Step 2: fix trailing commas before } or ]
-        fixed = re.sub(r",(\s*[}\]])", r"\1", cleaned)
-        result = _try(fixed)
-        if result is not None:
-            return result
-
-        # Step 3: strip // line comments (safe only when no :// URI present)
-        if "//" in fixed and "://" not in fixed:
-            no_comments = re.sub(r"//[^\n]*", "", fixed)
+        # Step 2: strip // line comments (safe only when no :// URI present)
+        if "//" in cleaned and "://" not in cleaned:
+            no_comments = re.sub(r"//[^\n]*", "", cleaned)
             result = _try(no_comments)
             if result is not None:
                 return result
         else:
-            no_comments = fixed
+            no_comments = cleaned
 
-        # Step 4: brace-matching extraction from the cleaned string
+        # Step 3: brace-matching extraction from the cleaned string
         obj_str = InsightsEngine._extract_json_object(no_comments)
         if obj_str:
-            # Apply trailing-comma fix to the extracted substring too
-            obj_str = re.sub(r",(\s*[}\]])", r"\1", obj_str)
             result = _try(obj_str)
             if result is not None:
                 return result
 
-        logger.warning(f"[insights] _parse_json exhausted all strategies. Raw: {raw}")
+        # Step 4: auto-close (last resort for truncated output)
+        if cleaned.startswith("{"):
+            auto_closed = InsightsEngine._auto_close_json(cleaned)
+            result = _try(auto_closed)
+            if result is not None:
+                logger.info("[insights] JSON recovered via auto-closing truncated output")
+                return result
+
+        logger.warning(f"[insights] _parse_json exhausted all strategies. Raw: {raw[:500]}...")
         return None
 
     @staticmethod

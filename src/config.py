@@ -31,10 +31,10 @@ class Config:
     LLM_BASE_URL    = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
     LLM_TOP_P       = float(os.getenv("LLM_TOP_P", "0.9"))
-    LLM_REPETITION_PENALTY = float(os.getenv("LLM_REPETITION_PENALTY", "1.1"))
+    LLM_REPETITION_PENALTY = float(os.getenv("LLM_REPETITION_PENALTY", "1.2"))
     # Hard wall-clock timeout for a single LLM API call (seconds).
     # Ollama can hang indefinitely on model load or OOM — this unblocks the worker.
-    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "240"))
+    LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "300"))
 
     # num_ctx (context window) used for chat sessions.
     # If not set in environment, LLMClient will discover it from the model.
@@ -93,7 +93,7 @@ class Config:
     KAFKA_CONSUMER_GROUP   = os.getenv("KAFKA_CONSUMER_GROUP",   "qsint-rag-worker")
 
     # LLM concurrency: 1=sequential, N=up to N parallel LLM calls via Kafka worker
-    LLM_PARALLEL = int(os.getenv("LLM_PARALLEL", "3"))
+    LLM_PARALLEL = int(os.getenv("LLM_PARALLEL", "2"))
 
     # ── Redis (required by QF framework at import time — not used for RAG) ────
     REDIS_HOST            = os.getenv("REDIS_HOST", "localhost")
