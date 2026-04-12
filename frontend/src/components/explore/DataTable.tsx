@@ -12,7 +12,7 @@ import {
   TagsOutlined, FilterOutlined, ClearOutlined, PlusOutlined,
 } from '@ant-design/icons'
 import { useQueryClient } from '@tanstack/react-query'
-import { useDocuments, useDocumentById, useEnrichedDocIds, useEnrichDocument, useForceReenrich, useReloadEnrichmentField, useDocumentStatuses, useSetDocumentStatus, useDocumentLabels, useSetDocumentLabels } from '@/hooks/useExplore'
+import { useDocuments, useDocumentById, useMultiEnrichedDocIds, useEnrichDocument, useForceReenrich, useReloadEnrichmentField, useDocumentStatuses, useSetDocumentStatus, useDocumentLabels, useSetDocumentLabels } from '@/hooks/useExplore'
 import { Document, DocumentEnrichment, DocReviewStatus, EnrichmentField, DocumentFilters } from '@/api/explore'
 import { RelationshipGraph } from '@/components/insights/RelationshipGraph'
 import dayjs from 'dayjs'
@@ -620,11 +620,21 @@ interface DetailPanelProps {
 
 function DocumentDetailPanel({ datasource, doc, reviewStatus, onStatusChange, onClose, onSendToRag, docLabels = [], allKnownLabels = [] }: DetailPanelProps) {
   const { token } = theme.useToken()
+  const qc = useQueryClient()
 
   // Enqueue enrichment via Kafka — polls until complete
   const { data: enrichData, isLoading: enrichLoading } =
     useEnrichDocument(datasource, doc.id, doc.text || '', !!(doc.text))
   const forceReenrich = useForceReenrich(datasource, doc.id)
+
+  // When polling detects enrichment is complete, invalidate the enriched-doc-ids
+  // cache so the ⭐ star appears immediately in the table without waiting for the
+  // next 30-second refresh interval.
+  useEffect(() => {
+    if (enrichData?.status === 'complete' && datasource) {
+      qc.invalidateQueries({ queryKey: ['enrichedDocIds', datasource] })
+    }
+  }, [enrichData?.status, datasource, qc])
 
   const enrichPayload = (enrichData?.payload as Record<string, any> | undefined) ?? null
   const enrichStatus: 'idle' | 'streaming' | 'complete' | 'error' =
@@ -867,9 +877,21 @@ export function DataTable({
 
   const { data, isLoading, error } = useDocuments(datasource, page, pageSize, query, filters)
 
-  // Fetch enriched doc IDs to mark rows with a star
-  const { data: enrichedIds } = useEnrichedDocIds(datasource)
-  const enrichedSet = useMemo(() => new Set(enrichedIds ?? []), [enrichedIds])
+  // In global-explore mode (datasource="") documents span multiple indices.
+  // Collect unique _source_index values from the loaded page so we can fetch
+  // enriched IDs for each index separately (same cache keys as per-index mode).
+  const sourceIndices = useMemo(() => {
+    if (datasource) return [datasource]
+    const seen = new Set<string>()
+    for (const doc of data?.documents ?? []) {
+      const src = (doc as any)._source_index
+      if (src) seen.add(src)
+    }
+    return [...seen]
+  }, [datasource, data?.documents])
+
+  // Fetch enriched doc IDs — works for single datasource or multi-index global explore
+  const enrichedSet = useMultiEnrichedDocIds(sourceIndices)
 
   // Analyst review statuses
   const { data: statusMap } = useDocumentStatuses(datasource)

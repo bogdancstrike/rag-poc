@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient, useQueryClient as _useQC } from '@tanstack/react-query'
-import { useEffect, useState, useRef } from 'react'
+import { useQuery, useQueries, useMutation, useQueryClient, useQueryClient as _useQC } from '@tanstack/react-query'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { API_BASE } from '@/api/client'
 import { fetchIndices, fetchDocuments, fetchDocumentById, fetchEnrichedDocIds, enrichDocument, reloadEnrichmentField, fetchDocumentStatuses, setDocumentStatus, fetchDocumentLabels, setDocumentLabels, DocReviewStatus, EnrichmentField, DocumentFilters } from '@/api/explore'
 
@@ -37,6 +37,34 @@ export function useEnrichedDocIds(datasource: string) {
     staleTime: 30_000,
     refetchInterval: 30_000,
   })
+}
+
+/**
+ * Fetch enriched doc IDs for multiple datasources in parallel and merge into
+ * a single Set. Used by DataTable in global-explore mode (datasource="") where
+ * documents span multiple indices — each doc carries `_source_index`.
+ *
+ * Uses the same per-datasource cache keys as `useEnrichedDocIds`, so cache
+ * invalidations from SSE enrichment completion propagate automatically.
+ */
+export function useMultiEnrichedDocIds(datasources: string[]): Set<string> {
+  const results = useQueries({
+    queries: datasources.map((ds) => ({
+      queryKey: ['enrichedDocIds', ds] as const,
+      queryFn: () => fetchEnrichedDocIds(ds),
+      staleTime: 30_000,
+      refetchInterval: 30_000,
+    })),
+  })
+
+  return useMemo(() => {
+    const combined = new Set<string>()
+    for (const r of results) {
+      for (const id of r.data ?? []) combined.add(id)
+    }
+    return combined
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results.map((r) => r.dataUpdatedAt).join(',')])
 }
 
 /** Fetch a single document by ID — used when navigating directly to /explore/:index/:docId. */
