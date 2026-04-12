@@ -145,7 +145,7 @@ FORMAT RULES:
    - "law"      (LAW)
    - "fac"      (FAC)
    No other type values are permitted.
-4. Aim for 15–25 nodes and 20–40 edges ONLY IF the source material supports it. Every node MUST have at least 2 edges; otherwise drop it. Prioritise the most central entities; omit isolated nodes to keep the graph sparse but meaningful.
+4. Aim for 8–12 nodes and 10–18 edges ONLY IF the source material supports it. Every node MUST have at least 2 edges; otherwise drop it. Prioritise the most central entities; omit isolated nodes to keep the graph sparse but meaningful. Keep node labels and relationship strings concise (under 30 characters).
 5. Assign each node a "community" integer (0-based). Nodes in the same community share a dominant theme, actor group, campaign, incident, or storyline as evidenced by the documents. Aim for 4–10 distinct communities, but only as many as the data genuinely supports.
 6. The JSON must have EXACTLY this structure:
 {
@@ -173,11 +173,12 @@ INSIGHTS_GRAPH_SCHEMA = """{
 INSIGHTS_GRAPH_RULES = """Rules (read INSIGHTS_GRAPH_PROMPT for full NER+graph instructions):
 - Extract named entities (people, orgs, locations, events, products, dates…) from the corpus.
 - Build a community knowledge graph: nodes = entities, edges = relationships stated in the text.
-- 15–25 nodes, 20–40 edges (only if the corpus supports it — do not pad with invented data).
+- 8–12 nodes, 10–18 edges (only if the corpus supports it — do not pad with invented data).
 - Every node must have at least 2 edges. Every edge must match a relationship from the text.
 - "source" and "target" must match node "id" values exactly.
 - Assign community integers (0-based) grouping nodes that share a theme/actor/storyline.
-- Do NOT add any keys beyond nodes and edges."""
+- Do NOT add any keys beyond nodes and edges.
+- Keep node labels and relationship strings short (under 30 characters each)."""
 
 # Aliases for the new granular task naming convention
 INSIGHTS_RELATIONSHIP_NETWORK_SCHEMA = INSIGHTS_GRAPH_SCHEMA
@@ -460,13 +461,28 @@ class PromptBuilder:
         total_window_tokens = Config.LLM_INSIGHTS_CTX
         RESPONSE_RESERVE_TOKENS = 8000
 
-        # We cap input budget to ensures the model doesn't time out during reasoning.
-        # Graph (network) and Narratives usually need more reasoning, so we use 32k.
-        # Others can use slightly more if available, but 32k is a very safe limit for 3B/8B models.
-        input_budget_tokens = min(32000, total_window_tokens - RESPONSE_RESERVE_TOKENS)
+        # Hard cap from config keeps prefill time manageable on small models.
+        # Default 8 500 tokens ≈ 29 750 chars:
+        #   simple tasks (1 500 char reserve)     → ~20 docs → consistent 20-28 s
+        #   relationship_network (10 000 reserve) → ~14 docs → consistent 28-35 s
+        # Values below ~7 000 trigger Ollama KV-cache eviction bimodal spikes (26s/53s).
+        input_budget_tokens = min(
+            Config.LLM_INSIGHTS_INPUT_MAX_TOKENS,
+            total_window_tokens - RESPONSE_RESERVE_TOKENS,
+        )
 
         total_input_chars = int(input_budget_tokens * Config.LLM_CHARS_PER_TOKEN)
-        available_chars = total_input_chars - Config.LLM_INSIGHTS_RESERVE_CHARS
+
+        # relationship_network has a very large NER+graph prompt (~10k chars).
+        # All other tasks have minimal schema+rules overhead (~1.5k chars).
+        PROMPT_OVERHEAD_CHARS = {
+            "relationship_network": 10000,
+            "hot_topics_sentiment": 1500,
+            "trending_signals":     1500,
+            "active_narratives":    1500,
+        }
+        prompt_overhead = PROMPT_OVERHEAD_CHARS.get(task_type, Config.LLM_INSIGHTS_RESERVE_CHARS)
+        available_chars = total_input_chars - prompt_overhead
 
         doc_lines = []
         used_chars = 0

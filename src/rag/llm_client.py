@@ -167,7 +167,7 @@ class LLMClient:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
             try:
-                resp = self._client.chat.completions.create(
+                create_kwargs: dict = dict(
                     model=self._model,
                     messages=full_messages,
                     temperature=0.0,
@@ -175,6 +175,9 @@ class LLMClient:
                     response_format={"type": "json_object"},
                     timeout=Config.LLM_TIMEOUT,
                 )
+                if max_tokens is not None:
+                    create_kwargs["max_tokens"] = max_tokens
+                resp = self._client.chat.completions.create(**create_kwargs)
                 content = resp.choices[0].message.content or "{}"
                 content = _strip_think_blocks(content)
                 span.set_attribute("llm.response_length", len(content))

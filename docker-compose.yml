@@ -76,7 +76,13 @@ services:
               capabilities: [gpu]
     environment:
       - OLLAMA_KEEP_ALIVE=24h
-      - OLLAMA_NUM_PARALLEL=3
+      # Sequential processing (LLM_PARALLEL=1 in app — no benefit from >1 slot here)
+      # More parallel slots = more KV cache reserved = less VRAM for model weights
+      - OLLAMA_NUM_PARALLEL=1
+      # Flash attention: O(n) memory prefill instead of O(n²) — huge for large prompts
+      - OLLAMA_FLASH_ATTN=1
+      # Quantize the KV cache from f16 → q8_0, cuts per-slot VRAM by ~50%
+      - OLLAMA_KV_CACHE_TYPE=q8_0
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b-instruct}
     healthcheck:
       test: ["CMD-SHELL", "ollama list > /dev/null"]
@@ -86,7 +92,13 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # ── Model Puller (Ensures LLM_MODEL is downloaded and configured) ─────────
+  # ── Model Puller — primary model ──────────────────────────────────────────
+  # Pulls the primary model and configures it with:
+  #   num_ctx   65536  — 64k context window (q8 KV cache keeps VRAM under 4GB on 3080)
+  #   num_predict 2048 — max output tokens (JSON responses rarely exceed 500 tokens)
+  #   num_batch   512  — prompt-eval batch size, tuned for RTX 3080
+  # Flash attention (OLLAMA_FLASH_ATTN) and q8 KV (OLLAMA_KV_CACHE_TYPE) are set
+  # on the ollama service, making 64k context practical.
   ollama-pull-model:
     image: ollama/ollama:latest
     container_name: qsint-rag-ollama-puller
@@ -98,16 +110,49 @@ services:
     environment:
       - OLLAMA_HOST=ollama:11434
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b-instruct}
-    # 1. Pull base model
-    # 2. Create/Overwrite the model tag with 64k context and 8k response limits
     command: >
-      "echo 'Pulling $LLM_MODEL...' && 
-       ollama pull $LLM_MODEL && 
-       echo 'Configuring $LLM_MODEL with 64k context...' && 
-       echo \"FROM $LLM_MODEL\" > Modelfile && 
-       echo \"PARAMETER num_ctx 65536\" >> Modelfile && 
-       echo \"PARAMETER num_predict 8192\" >> Modelfile && 
-       ollama create $LLM_MODEL -f Modelfile"
+      "echo 'Pulling $LLM_MODEL...' &&
+       ollama pull $LLM_MODEL &&
+       echo 'Configuring $LLM_MODEL...' &&
+       printf 'FROM %s\nPARAMETER num_ctx 65536\nPARAMETER num_predict 2048\nPARAMETER num_batch 512\n' \"$LLM_MODEL\" > /tmp/Modelfile &&
+       ollama create $LLM_MODEL -f /tmp/Modelfile &&
+       echo 'Primary model ready: ctx=65536 predict=2048 batch=512'"
+
+  # ── Model Puller — phi4-mini (Microsoft, 3.8B, 128k ctx, fast structured output)
+  ollama-pull-phi4-mini:
+    image: ollama/ollama:latest
+    container_name: qsint-rag-ollama-puller-phi4
+    networks: [ragnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    command: >
+      "echo 'Pulling phi4-mini...' &&
+       ollama pull phi4-mini &&
+       printf 'FROM phi4-mini\nPARAMETER num_ctx 65536\nPARAMETER num_predict 2048\nPARAMETER num_batch 512\n' > /tmp/Modelfile_phi4 &&
+       ollama create phi4-mini -f /tmp/Modelfile_phi4 &&
+       echo 'phi4-mini ready'"
+
+  # ── Model Puller — gemma3:4b (Google, 4B, 128k ctx, excellent quality/speed)
+  ollama-pull-gemma3:
+    image: ollama/ollama:latest
+    container_name: qsint-rag-ollama-puller-gemma3
+    networks: [ragnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    command: >
+      "echo 'Pulling gemma3:4b...' &&
+       ollama pull gemma3:4b &&
+       printf 'FROM gemma3:4b\nPARAMETER num_ctx 65536\nPARAMETER num_predict 2048\nPARAMETER num_batch 512\n' > /tmp/Modelfile_gemma3 &&
+       ollama create gemma3:4b -f /tmp/Modelfile_gemma3 &&
+       echo 'gemma3:4b ready'"
 
   # ── Jaeger (OTLP tracing) ───────────────────────────────────────────────────
   jaeger:

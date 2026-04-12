@@ -41,6 +41,10 @@ class Config:
     LLM_INSIGHTS_CTX        = int(os.getenv("LLM_INSIGHTS_CTX", "0"))
     # Max output tokens for the insights JSON response.
     LLM_INSIGHTS_MAX_TOKENS = int(os.getenv("LLM_INSIGHTS_MAX_TOKENS", "4096"))
+    # Max INPUT tokens packed into insight prompts. Caps prefill time on small models.
+    # 8500 tokens ≈ 29 750 chars: ~20 docs for simple tasks, ~14 for relationship_network.
+    # Values below ~7 000 cause Ollama KV-cache bimodal spikes (26s/53s alternating).
+    LLM_INSIGHTS_INPUT_MAX_TOKENS = int(os.getenv("LLM_INSIGHTS_INPUT_MAX_TOKENS", "8500"))
     # Conservative chars-per-token estimate.
     LLM_CHARS_PER_TOKEN     = float(os.getenv("LLM_CHARS_PER_TOKEN", "3.5"))
     # Characters reserved for prompts and JSON schema.

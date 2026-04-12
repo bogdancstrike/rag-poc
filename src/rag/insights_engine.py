@@ -258,7 +258,7 @@ class InsightsEngine:
                 
                 payload = self._parse_json(raw)
                 if payload is None:
-                    logger.error(f"[insights] {ttype} JSON parse fail. Raw output: {raw[:500]}...")
+                    logger.error(f"[insights] {ttype} JSON parse fail. Raw output: {raw}...")
                     raise ValueError(f"Failed to parse {ttype} JSON from LLM")
 
                 # Empty dict {} means LLM produced no useful output — store as complete
