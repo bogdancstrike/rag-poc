@@ -1,17 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
-  Tabs, Spin, Alert, Typography, Space, Button, Tag, theme,
+  Tabs, Spin, Alert, Typography, Space, Button, Tag, theme, notification,
 } from 'antd'
 import {
   TableOutlined, BulbOutlined, MessageOutlined,
-  ArrowLeftOutlined, LoadingOutlined,
+  ArrowLeftOutlined, LoadingOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { useInvestigation } from '@/hooks/useInvestigations'
 import { DataTable } from '@/components/explore/DataTable'
 import { InsightsPanel } from '@/components/insights/InsightsPanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useSessionStore } from '@/stores/sessionStore'
+import { apiClient } from '@/api/client'
 import type { Investigation } from '@/types'
 
 const { Text, Title } = Typography
@@ -20,11 +21,63 @@ interface Props {
   id: string
 }
 
+/**
+ * Fetch the first `count` documents from the investigation index and queue
+ * enrichment for each one. Fires and forgets — errors are shown as notifications.
+ */
+async function triggerAutoEnrichment(indexName: string, count: number) {
+  notification.info({
+    message: 'Auto-enrichment starting',
+    description: `Fetching up to ${count} documents to enrich…`,
+    icon: <ThunderboltOutlined style={{ color: '#faad14' }} />,
+    duration: 4,
+  })
+
+  try {
+    const resp = await apiClient.get<{ documents: any[]; total: number }>(
+      '/v1/documents',
+      { params: { datasource: indexName, limit: count, offset: 0 } },
+    )
+    const docs  = resp.data.documents ?? []
+    const total = resp.data.total ?? 0
+    const batch = docs.slice(0, count)
+
+    if (batch.length === 0) {
+      notification.warning({ message: 'Auto-enrichment', description: 'No documents found in index.' })
+      return
+    }
+
+    notification.success({
+      message: 'Auto-enrichment queued',
+      description: `Enriching ${batch.length} of ${total} documents. Monitor progress in the Data tab.`,
+      icon: <ThunderboltOutlined style={{ color: '#52c41a' }} />,
+      duration: 6,
+    })
+
+    // Fire enrichment requests in parallel (backend queues via Kafka anyway)
+    await Promise.allSettled(
+      batch.map((doc: any) =>
+        apiClient.post('/v1/documents/enrich', {
+          doc_id:     doc.id,
+          datasource: indexName,
+          text:       doc.text || doc.content || doc.body || '',
+        }).catch(() => {}),  // silent per-doc errors — task queue handles retries
+      ),
+    )
+  } catch (e: any) {
+    notification.error({
+      message: 'Auto-enrichment failed',
+      description: e?.message || 'Could not fetch documents from the investigation index.',
+    })
+  }
+}
+
 const VALID_TABS = ['data', 'insights', 'chat'] as const
 type TabKey = typeof VALID_TABS[number]
 
 export function InvestigationDetail({ id }: Props) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { token } = theme.useToken()
   const [searchParams, setSearchParams] = useSearchParams()
   const { data: investigation, isLoading, error } = useInvestigation(id)
@@ -36,6 +89,10 @@ export function InvestigationDetail({ id }: Props) {
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
   const { pendingQuery: storePending, setPendingQuery: setStorePending } = useSessionStore()
 
+  // Auto-enrichment: read count from router state set by the wizard
+  const autoEnrichCount: number = (location.state as any)?.autoEnrichCount ?? 0
+  const enrichTriggeredRef = useRef(false)
+
   // Handle "Ask about this" flow from InsightsPanel → ChatPanel
   useEffect(() => {
     if (storePending) {
@@ -44,6 +101,20 @@ export function InvestigationDetail({ id }: Props) {
       switchTab('chat')
     }
   }, [storePending])
+
+  // Trigger auto-enrichment once the investigation transitions to "ready"
+  useEffect(() => {
+    if (
+      autoEnrichCount > 0 &&
+      investigation?.status === 'ready' &&
+      investigation?.index_name &&
+      !enrichTriggeredRef.current
+    ) {
+      enrichTriggeredRef.current = true
+      triggerAutoEnrichment(investigation.index_name, autoEnrichCount)
+    }
+  }, [investigation?.status, investigation?.index_name, autoEnrichCount])
+
 
   const switchTab = (tab: TabKey) => {
     setActiveTab(tab)
@@ -114,6 +185,11 @@ export function InvestigationDetail({ id }: Props) {
           )}
           {inv.status === 'ready' && inv.doc_count !== null && (
             <Tag color="success">{inv.doc_count.toLocaleString()} docs</Tag>
+          )}
+          {inv.status === 'ready' && autoEnrichCount > 0 && (
+            <Tag icon={<ThunderboltOutlined />} color="gold">
+              Auto-enriching {Math.min(autoEnrichCount, inv.doc_count ?? autoEnrichCount)} of {inv.doc_count ?? '?'}
+            </Tag>
           )}
           {inv.status === 'error' && (
             <Tag color="error">Error</Tag>

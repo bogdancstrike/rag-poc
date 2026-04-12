@@ -715,7 +715,7 @@ curl -X DELETE http://localhost:5100/rag/v1/searches/SEARCH_ID
 
 ### Investigations
 
-Investigations combine multiple saved searches into a private ES index for focused analysis.
+Investigations combine multiple saved searches into a private ES index for focused analysis. The UI wizard provides a 5-step creation flow: Name → Searches → Scrapers (mock) → Auto-enrichment → Review.
 
 #### `GET /v1/investigations`
 List all investigations.
@@ -764,6 +764,30 @@ Once the background task completes, `status` transitions to `ready` (or `error`)
 
 > The investigation index (`inv_gru_infrastructure_44429cab`) can be used as a `datasource` in **all other endpoints** — chat, insights, enrichment, documents, labels, etc.
 
+**Auto-enrichment after index creation** — to automatically enrich the first N documents once the investigation is ready, poll status and then batch-enrich:
+
+```bash
+INV_IDX="inv_gru_infrastructure_44429cab"
+N=10
+
+# 1. Wait for status=ready
+until [[ "$(curl -s http://localhost:5100/rag/v1/investigations/44429cab-... | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])")" == "ready" ]]; do
+  sleep 2
+done
+
+# 2. Fetch first N docs and enrich each
+curl -s "http://localhost:5100/rag/v1/documents?datasource=$INV_IDX&limit=$N" | python3 -c "
+import json, sys, subprocess
+for doc in json.load(sys.stdin)['documents']:
+    payload = json.dumps({'doc_id': doc['id'], 'datasource': '$INV_IDX', 'text': doc.get('text','')})
+    subprocess.run(['curl','-s','-X','POST','http://localhost:5100/rag/v1/documents/enrich',
+                    '-H','Content-Type: application/json','-d',payload], capture_output=True)
+    print(f'Queued: {doc[\"id\"][:12]}...')
+"
+```
+
+The UI wizard does this automatically when "Auto-enrichment" is enabled — it triggers after the investigation status transitions to `ready`.
+
 #### `GET /v1/investigations/<investigation_id>`
 Get investigation status and metadata.
 
@@ -799,6 +823,14 @@ stateDiagram-v2
 
 ### Investigation Creation Flow
 
+**UI Wizard — 5 steps:**
+1. **Name** — investigation name and description
+2. **Searches** — select saved searches to seed the index
+3. **Scrapers** *(mock, future)* — configure YouTube / Facebook / TikTok / Telegram sources with URLs and date ranges
+4. **Auto-enrichment** — optionally enrich the first N documents automatically once the index is ready
+5. **Review** — confirm and create
+
+**Backend flow:**
 ```
 POST /v1/investigations
     │
@@ -811,7 +843,14 @@ Kafka Worker:
     ├─ For each search_id:
     │   ├─ Load saved search (query + filters)
     │   └─ Scroll+bulk-copy matching docs from source indices
+    │       (falls back to qsint_docs* wildcard when no index_patterns set)
     └─ Update DB row (status=ready, doc_count=N)
+
+UI (on status → ready):
+    └─ If auto-enrich enabled:
+        ├─ Fetch first N docs from investigation index
+        ├─ POST /v1/documents/enrich for each doc (parallel)
+        └─ Show notification + "Auto-enriching N of total" tag in header
 ```
 
 ### Document Enrichment Flow

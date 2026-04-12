@@ -25,8 +25,10 @@ export function InvestigationsPage() {
     })
   }
 
-  const handleCreated = (id: string) => {
-    navigate(`/investigations/${id}`)
+  const handleCreated = (id: string, autoEnrichCount: number) => {
+    navigate(`/investigations/${id}`, {
+      state: autoEnrichCount > 0 ? { autoEnrichCount } : undefined,
+    })
   }
 
   return (
