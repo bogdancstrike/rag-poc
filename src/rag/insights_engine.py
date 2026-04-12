@@ -106,17 +106,45 @@ class InsightsEngine:
                 # Re-load after cleanup
                 current_insights = self._load_all_from_cache(datasource)
 
-            # 2. Check whether tasks are already in flight (<10 min old)
+            # 2. Reset tasks that are stuck as pending/processing for >10 min.
+            # This prevents a false "UPDATING" indicator when the worker died or
+            # was never started — those rows must not block a real refresh.
             now = datetime.now(timezone.utc)
+            STUCK_TIMEOUT_SEC = 600  # 10 minutes
+            stuck_types = []
+            for ttype, t in current_insights.items():
+                if t.get("status") in ("pending", "processing"):
+                    gen_at = self._parse_iso_utc(t.get("generated_at"))
+                    if not gen_at or (now - gen_at).total_seconds() >= STUCK_TIMEOUT_SEC:
+                        stuck_types.append(ttype)
+
+            if stuck_types:
+                logger.warning(
+                    f"[insights] Resetting {len(stuck_types)} stuck task(s) for {datasource}: {stuck_types}"
+                )
+                from src.session.models import InsightsCache, get_db
+                with get_db() as db:
+                    rows = db.query(InsightsCache).filter(
+                        InsightsCache.datasource == datasource,
+                        InsightsCache.insight_type.in_(stuck_types),
+                    ).all()
+                    for row in rows:
+                        row.status = "error"
+                        row.error  = "Timed out — worker did not complete this task"
+                    db.commit()
+                # Re-load with corrected statuses
+                current_insights = self._load_all_from_cache(datasource)
+
+            # 3. Check whether tasks are actively in flight (<10 min old)
             is_processing = False
             for t in current_insights.values():
                 if t.get("status") in ("pending", "processing"):
                     gen_at = self._parse_iso_utc(t.get("generated_at"))
-                    if gen_at and (now - gen_at).total_seconds() < 600:
+                    if gen_at and (now - gen_at).total_seconds() < STUCK_TIMEOUT_SEC:
                         is_processing = True
                         break
 
-            # 3. Determine whether a refresh is needed
+            # 4. Determine whether a refresh is needed
             needs_refresh = force_refresh
             if not needs_refresh and not is_processing:
                 if not current_insights:
@@ -140,7 +168,11 @@ class InsightsEngine:
 
                 # Route the coordinator through Kafka (or daemon thread fallback)
                 from src.worker.kafka_producer import publish_task
-                publish_task({"task_type": "insight_coordinator", "datasource": datasource})
+                publish_task({
+                    "task_type": "insight_coordinator",
+                    "datasource": datasource,
+                    "force": force_refresh
+                })
 
                 current_insights = self._load_all_from_cache(datasource)
                 span.set_attribute("insights.refresh_triggered", True)
@@ -165,11 +197,10 @@ class InsightsEngine:
 
     # ── Task Orchestration ──────────────────────────────────────────────────────
 
-    def _run_coordinator(self, datasource: str) -> None:
+    def run_all_insights(self, datasource: str, force: bool = False) -> None:
         """Background coordinator: fetch the ES sample then dispatch AI tasks.
 
-        Called non-blocking from get_insights(). This is the method that does the
-        expensive Elasticsearch call so the HTTP thread never blocks on it.
+        Called by the Kafka worker (insight_coordinator task).
         """
         try:
             retriever = get_retriever()
@@ -190,17 +221,17 @@ class InsightsEngine:
             doc_ids = sorted([str(d.get("id")) for d in sample])
             sample_hash = hashlib.sha256(",".join(doc_ids).encode()).hexdigest()
             logger.info(f"[insights] Coordinator: {len(sample)} docs, hash={sample_hash[:8]} for {datasource}")
-            self._trigger_tasks(datasource, sample, sample_hash)
+            self._trigger_tasks(datasource, sample, sample_hash, force=force)
         except Exception as e:
             logger.error(f"[insights] Coordinator failed for {datasource}: {e}", exc_info=True)
             for ttype in all_tasks:
                 self._set_task_status(datasource, ttype, "error", "coordinator_failed", error=str(e))
 
-    def _trigger_tasks(self, datasource: str, sample: List[dict], sample_hash: str):
+    def _trigger_tasks(self, datasource: str, sample: List[dict], sample_hash: str, force: bool = False):
         """Publish all insight sub-tasks to Kafka.
         
         Intelligent Skip: If a task is already 'complete' for this sample_hash, 
-        do not re-trigger it.
+        do not re-trigger it unless force=True.
         """
         from src.worker.kafka_producer import publish_task
         
@@ -216,13 +247,14 @@ class InsightsEngine:
         all_tasks = ai_tasks + stats_tasks
         
         for ttype in all_tasks:
-            # Skip logic: only re-run if hash changed or it failed/missing
-            cached = cache.get(ttype)
-            if cached and cached.get("status") == "complete" and cached.get("sample_hash") == sample_hash:
-                logger.debug(f"[insights] Skipping {ttype} (already complete for hash {sample_hash[:8]})")
-                continue
+            # Skip logic: only re-run if hash changed or it failed/missing (unless forced)
+            if not force:
+                cached = cache.get(ttype)
+                if cached and cached.get("status") == "complete" and cached.get("sample_hash") == sample_hash:
+                    logger.debug(f"[insights] Skipping {ttype} (already complete for hash {sample_hash[:8]})")
+                    continue
             
-            # Not complete or stale hash -> mark pending and dispatch
+            # Not complete or stale hash (or forced) -> mark pending and dispatch
             self._set_task_status(datasource, ttype, "pending", sample_hash, clear_data=True)
             
             if ttype in stats_tasks:

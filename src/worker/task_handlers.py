@@ -4,6 +4,7 @@ Each function receives a task dict and performs all the work (LLM calls, DB
 updates, SSE notifications). Handlers are pure — no Kafka dependency.
 """
 import hashlib
+import json
 from datetime import datetime, timezone
 
 from framework.commons.logger import logger
@@ -86,9 +87,16 @@ def handle_insight_ai(task: dict) -> None:
     sample_hash  = task["sample_hash"]
     
     from src.rag.insights_engine import get_insights_engine
+    from src.rag.retriever import get_retriever
+    
     engine = get_insights_engine()
+    retriever = get_retriever()
+    
+    # We must fetch the same sample used for hashing
+    sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
+    
     # Logic is internal to InsightsEngine
-    engine._run_ai_task(datasource, insight_type, sample_hash)
+    engine._run_ai_task(datasource, insight_type, sample, sample_hash)
 
 
 def handle_insight_stats(task: dict) -> None:
@@ -103,15 +111,90 @@ def handle_insight_stats(task: dict) -> None:
 
 
 def handle_create_investigation(task: dict) -> None:
-    """Create investigation from search query."""
-    from src.session.session_service import get_session_service
-    service = get_session_service()
-    service.create_investigation(
-        name=task["name"],
-        query=task["query"],
-        datasource=task["datasource"],
-        investigation_id=task.get("investigation_id")
-    )
+    """Background task: create a new ES index for an investigation and populate it.
+
+    1. Create the destination ES index
+    2. For each linked saved search, scroll matching docs from source indices
+       and bulk-copy them into the investigation index (deduplication via ES _id)
+    3. Update DB status to 'ready'
+    """
+    inv_id     = task["investigation_id"]
+    index_name = task["index_name"]
+    search_ids = task.get("search_ids") or []
+
+    from src.session.session_service import get_saved_search, update_investigation_status
+    from src.datasource.es_client import ESClient
+
+    try:
+        es = ESClient()
+
+        # 1. Create the investigation index
+        es.create_index(index_name)
+
+        # 2. For each saved search, copy matching docs via scroll+bulk
+        total_copied = 0
+
+        for sid in search_ids:
+            search = get_saved_search(sid)
+            if not search:
+                logger.warning(f"[investigation] Search {sid} not found, skipping")
+                continue
+
+            query_str = search.get("query", "") or ""
+            filters   = search.get("filters") or {}
+
+            # Build ES query from saved search definition
+            filter_clauses = []
+            if filters.get("sentiment"):
+                filter_clauses.append({"term": {"sentiment.keyword": filters["sentiment"]}})
+            if filters.get("date_from") or filters.get("date_to"):
+                range_clause: dict = {}
+                if filters.get("date_from"):
+                    range_clause["gte"] = filters["date_from"]
+                if filters.get("date_to"):
+                    range_clause["lte"] = filters["date_to"]
+                filter_clauses.append({"range": {"created_at": range_clause}})
+
+            q = query_str[:512]
+            text_query = (
+                {"query_string": {"query": q, "default_operator": "AND"}}
+                if q
+                else {"match_all": {}}
+            )
+            query_body = (
+                {"query": {"bool": {"must": text_query, "filter": filter_clauses}}}
+                if filter_clauses
+                else {"query": text_query}
+            )
+
+            # Use index_patterns from filters or search all qsint indices.
+            # Config.ES_INDEX may not exist (seeded data lives in *_cyber, *_geopolitics, etc.)
+            source_indices = filters.get("index_patterns") or ["qsint_docs*"]
+
+            copied = es.copy_documents(
+                source_indices=source_indices,
+                query_body=query_body,
+                dest_index=index_name,
+            )
+            total_copied += copied
+            logger.info(f"[investigation] Copied {copied} docs from search {sid}")
+
+        # 3. Update status
+        update_investigation_status(
+            investigation_id=inv_id,
+            status="ready",
+            doc_count=total_copied,
+        )
+        logger.info(f"[investigation] Ready: {inv_id} index={index_name} docs={total_copied}", "magenta")
+
+    except Exception as e:
+        logger.error(f"[investigation] Failed to create {inv_id}: {e}", exc_info=True)
+        update_investigation_status(
+            investigation_id=inv_id,
+            status="error",
+            error_msg=str(e),
+        )
+        raise
 
 
 # ── Enrichment tasks ───────────────────────────────────────────────────────────

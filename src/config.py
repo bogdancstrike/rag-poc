@@ -93,7 +93,7 @@ class Config:
     KAFKA_CONSUMER_GROUP   = os.getenv("KAFKA_CONSUMER_GROUP",   "qsint-rag-worker")
 
     # LLM concurrency: 1=sequential, N=up to N parallel LLM calls via Kafka worker
-    LLM_PARALLEL = int(os.getenv("LLM_PARALLEL", "2"))
+    LLM_PARALLEL = int(os.getenv("LLM_PARALLEL", "1"))
 
     # ── Redis (required by QF framework at import time — not used for RAG) ────
     REDIS_HOST            = os.getenv("REDIS_HOST", "localhost")
