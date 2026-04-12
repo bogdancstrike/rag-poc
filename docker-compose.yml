@@ -114,9 +114,9 @@ services:
       "echo 'Pulling $LLM_MODEL...' &&
        ollama pull $LLM_MODEL &&
        echo 'Configuring $LLM_MODEL...' &&
-       printf 'FROM %s\nPARAMETER num_ctx 65536\nPARAMETER num_predict 2048\nPARAMETER num_batch 512\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.1\n' \"$LLM_MODEL\" > /tmp/Modelfile &&
+       printf 'FROM %s\nPARAMETER num_ctx 32768\nPARAMETER num_predict 2048\nPARAMETER num_batch 1024\nPARAMETER kv_cache_type q4_0\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.1\n' \"$LLM_MODEL\" > /tmp/Modelfile &&
        ollama create $LLM_MODEL -f /tmp/Modelfile &&
-       echo 'Primary model ready: ctx=65536 predict=2048 batch=512 temp=0.1 top_p=0.9 penalty=1.1'"
+       echo 'Primary model ready: ctx=32768 batch=1024 kv=q4_0'"
 
   # ── Model Puller — phi4-mini (Microsoft, 3.8B, 128k ctx, fast structured output)
   ollama-pull-phi4-mini:
@@ -132,7 +132,7 @@ services:
     command: >
       "echo 'Pulling phi4-mini...' &&
        ollama pull phi4-mini &&
-       printf 'FROM phi4-mini\nPARAMETER num_ctx 65536\nPARAMETER num_predict 2048\nPARAMETER num_batch 512\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.1\n' > /tmp/Modelfile_phi4 &&
+       printf 'FROM phi4-mini\nPARAMETER num_ctx 32768\nPARAMETER num_predict 2048\nPARAMETER num_batch 1024\nPARAMETER kv_cache_type q4_0\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.1\n' > /tmp/Modelfile_phi4 &&
        ollama create phi4-mini -f /tmp/Modelfile_phi4 &&
        echo 'phi4-mini ready'"
 
@@ -150,7 +150,7 @@ services:
     command: >
       "echo 'Pulling gemma3:4b...' &&
        ollama pull gemma3:4b &&
-       printf 'FROM gemma3:4b\nPARAMETER num_ctx 65536\nPARAMETER num_predict 2048\nPARAMETER num_batch 512\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.1\n' > /tmp/Modelfile_gemma3 &&
+       printf 'FROM gemma3:4b\nPARAMETER num_ctx 32768\nPARAMETER num_predict 2048\nPARAMETER num_batch 1024\nPARAMETER kv_cache_type q4_0\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.1\n' > /tmp/Modelfile_gemma3 &&
        ollama create gemma3:4b -f /tmp/Modelfile_gemma3 &&
        echo 'gemma3:4b ready'"
 
