@@ -249,16 +249,29 @@ class InsightsEngine:
             try:
                 llm = get_llm()
                 messages, system = self._prompt_builder.build_insights_messages(sample, task_type=ttype)
+                
+                # Attempt 1: Standard Config (temp=0.1)
                 raw = llm.complete_json(
                     messages, system,
                     num_ctx=Config.LLM_INSIGHTS_CTX,
                     max_tokens=Config.LLM_INSIGHTS_MAX_TOKENS,
                 )
-                logger.debug(f"[insights] LLM response: {raw[:500]}...")
-                
                 payload = self._parse_json(raw)
+                
+                # Attempt 2: Higher temperature (0.3) if parsing failed or output was empty
+                # Some models need a bit more entropy to "break out" of a bad state.
                 if payload is None:
-                    logger.error(f"[insights] {ttype} JSON parse fail. Raw output: {raw}...")
+                    logger.warning(f"[insights] {ttype} JSON parse fail, retrying with temperature=0.3...")
+                    raw = llm.complete_json(
+                        messages, system,
+                        num_ctx=Config.LLM_INSIGHTS_CTX,
+                        max_tokens=Config.LLM_INSIGHTS_MAX_TOKENS,
+                        temperature=0.3
+                    )
+                    payload = self._parse_json(raw)
+
+                if payload is None:
+                    logger.error(f"[insights] {ttype} JSON parse fail after retry. Raw output: {raw[:300]}...")
                     raise ValueError(f"Failed to parse {ttype} JSON from LLM")
 
                 # Empty dict {} means LLM produced no useful output — store as complete

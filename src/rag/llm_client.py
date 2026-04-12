@@ -109,8 +109,12 @@ class LLMClient:
                     model=self._model,
                     messages=full_messages,
                     temperature=self._temperature,
+                    top_p=Config.LLM_TOP_P,
                     stream=False,
                     timeout=Config.LLM_TIMEOUT,
+                    extra_body={
+                        "repeat_penalty": Config.LLM_REPETITION_PENALTY,
+                    }
                 )
                 content = resp.choices[0].message.content or ""
                 content = _strip_think_blocks(content)
@@ -134,8 +138,12 @@ class LLMClient:
                     model=self._model,
                     messages=full_messages,
                     temperature=self._temperature,
+                    top_p=Config.LLM_TOP_P,
                     stream=True,
                     timeout=Config.LLM_TIMEOUT,
+                    extra_body={
+                        "repeat_penalty": Config.LLM_REPETITION_PENALTY,
+                    }
                 )
             except Exception as e:
                 logger.error(f"[llm] stream error: {e}", exc_info=True)
@@ -158,6 +166,7 @@ class LLMClient:
         system: str = "",
         num_ctx: int | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> str:
         """Request a JSON response. Returns raw string — caller parses it."""
         if "qwen3" in self._model.lower():
@@ -167,13 +176,18 @@ class LLMClient:
             span.set_attribute("llm.model", self._model)
             span.set_attribute("llm.messages_count", len(full_messages))
             try:
+                temp = temperature if temperature is not None else self._temperature
                 create_kwargs: dict = dict(
                     model=self._model,
                     messages=full_messages,
-                    temperature=0.0,
+                    temperature=temp,
+                    top_p=Config.LLM_TOP_P,
                     stream=False,
                     response_format={"type": "json_object"},
                     timeout=Config.LLM_TIMEOUT,
+                    extra_body={
+                        "repeat_penalty": Config.LLM_REPETITION_PENALTY,
+                    }
                 )
                 if max_tokens is not None:
                     create_kwargs["max_tokens"] = max_tokens

@@ -31,7 +31,8 @@ INSIGHTS_TRENDING_SIGNALS_SCHEMA = """{
 INSIGHTS_TRENDING_SIGNALS_RULES = """Rules:
 - Identify rising or falling signals based on frequency, recency, and urgency.
 - Look for emerging threats, shifts in actor behavior, or new geopolitical developments.
-- Up to 8 signals, most significant first."""
+- Up to 8 signals, most significant first.
+- Output ONLY JSON. Stop immediately after final '}'."""
 
 INSIGHTS_ACTIVE_NARRATIVES_SCHEMA = """{
   "active_narratives": [
@@ -42,7 +43,8 @@ INSIGHTS_ACTIVE_NARRATIVES_SCHEMA = """{
 INSIGHTS_ACTIVE_NARRATIVES_RULES = """Rules:
 - Discover high-level storylines or disinformation campaigns running through the documents.
 - Identify the core message, its sentiment, and the primary actors involved.
-- Up to 5 narratives."""
+- Up to 5 narratives.
+- Output ONLY JSON. Stop immediately after final '}'."""
 
 INSIGHTS_HOT_TOPICS_SENTIMENT_SCHEMA = """{
   "hot_topics": [
@@ -54,7 +56,8 @@ INSIGHTS_HOT_TOPICS_SENTIMENT_RULES = """Rules:
 - List discrete topics mentioned across the corpus.
 - sentiment_score: -1.0 (hostile) to 1.0 (positive).
 - brief_context: 1 sentence explaining the topic's relevance.
-- Up to 15 topics."""
+- Up to 15 topics.
+- Output ONLY JSON. Stop immediately after final '}'."""
 
 INSIGHTS_NER_PROMPT = """Extract named entities from the provided documents.
 FORMAT RULES:
@@ -64,6 +67,7 @@ FORMAT RULES:
   "entities": [{"name": "string", "type": "person|org|location|event|tool|vulnerability", "frequency": int, "sentiment": "string"}]
 }
 3. Do NOT include any other keys like "summary" or "key_findings" at the top level.
+4. Stop immediately after the final '}'.
 """
 
 INSIGHTS_GRAPH_PROMPT = """Detect communities of related entities across ALL provided documents and build a knowledge graph centred on those communities.
@@ -170,15 +174,16 @@ INSIGHTS_GRAPH_SCHEMA = """{
   ]
 }"""
 
-INSIGHTS_GRAPH_RULES = """Rules (read INSIGHTS_GRAPH_PROMPT for full NER+graph instructions):
-- Extract named entities (people, orgs, locations, events, products, dates…) from the corpus.
-- Build a community knowledge graph: nodes = entities, edges = relationships stated in the text.
-- 8–12 nodes, 10–18 edges (only if the corpus supports it — do not pad with invented data).
-- Every node must have at least 2 edges. Every edge must match a relationship from the text.
-- "source" and "target" must match node "id" values exactly.
-- Assign community integers (0-based) grouping nodes that share a theme/actor/storyline.
-- Do NOT add any keys beyond nodes and edges.
-- Keep node labels and relationship strings short (under 30 characters each)."""
+INSIGHTS_GRAPH_RULES = """Rules:
+1. Extract ONLY major Named Entities (people, orgs, gpe, event, product) mentioned in the corpus.
+2. Construct a knowledge graph: nodes = entities, edges = relationships stated in the text.
+3. Aim for 8–15 nodes and 10–20 edges. DO NOT exceed 20 nodes.
+4. Every node MUST have at least one edge. Omit isolated entities.
+5. source/target in edges MUST match node 'id' exactly.
+6. Assign each node a 'community' integer (0-based) based on shared stories or themes.
+7. Node 'type' must be: person, org, gpe, loc, date, money, event, product, norp, law, fac.
+8. Relationship descriptions should be < 25 characters.
+9. Output ONLY the JSON object. No preamble, no postamble. Stop immediately after the final '}'."""
 
 # Aliases for the new granular task naming convention
 INSIGHTS_RELATIONSHIP_NETWORK_SCHEMA = INSIGHTS_GRAPH_SCHEMA

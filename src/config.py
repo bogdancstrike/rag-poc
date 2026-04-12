@@ -29,7 +29,9 @@ class Config:
 
     # ── LLM (Ollama OpenAI-compatible API) ─────────────────────────────────────
     LLM_BASE_URL    = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
-    LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.3"))
+    LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+    LLM_TOP_P       = float(os.getenv("LLM_TOP_P", "0.9"))
+    LLM_REPETITION_PENALTY = float(os.getenv("LLM_REPETITION_PENALTY", "1.1"))
     # Hard wall-clock timeout for a single LLM API call (seconds).
     # Ollama can hang indefinitely on model load or OOM — this unblocks the worker.
     LLM_TIMEOUT     = int(os.getenv("LLM_TIMEOUT", "240"))
