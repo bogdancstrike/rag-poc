@@ -1,15 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
-  Modal, Steps, Form, Input, Select, Button, Space, Typography, Table, Tag,
-  Alert, Switch, InputNumber, DatePicker, Collapse, theme, Divider,
+  Modal, Steps, Form, Input, Button, Space, Typography, Table, Tag,
+  Alert, Switch, InputNumber, DatePicker, theme, Divider, Spin,
 } from 'antd'
 import {
   PlusOutlined, SearchOutlined, ApiOutlined, ThunderboltOutlined,
-  YoutubeOutlined, GlobalOutlined,
+  YoutubeOutlined, GlobalOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
 import type { SavedSearch } from '@/types'
 import { useSavedSearches } from '@/hooks/useSavedSearches'
 import { useCreateInvestigation } from '@/hooks/useInvestigations'
+import { apiClient } from '@/api/client'
 import dayjs from 'dayjs'
 
 const { Text, Paragraph } = Typography
@@ -75,6 +76,53 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
   const [platformUrls, setPlatformUrls]         = useState<Record<string, string>>({})
   const [platformDates, setPlatformDates]       = useState<Record<string, [string, string] | null>>({})
 
+  // Estimated total document count for the enrichment step
+  const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null)
+  const [estimating, setEstimating]         = useState(false)
+
+  // When entering enrichment step (step 3), compute a document count estimate
+  // by querying each selected search's indices with its query string.
+  useEffect(() => {
+    if (step !== 3 || state.selectedSearchIds.length === 0) {
+      if (step === 3 && state.selectedSearchIds.length === 0) setEstimatedTotal(0)
+      return
+    }
+    setEstimating(true)
+    setEstimatedTotal(null)
+
+    const selectedSearches = searches.filter((s) => state.selectedSearchIds.includes(s.id))
+
+    // For each search, query each of its index_patterns (or global) with limit=1
+    // to get the total doc count. Sum across all searches (may double-count overlap
+    // between searches, but serves as an upper-bound estimate).
+    const tasks = selectedSearches.flatMap((s) => {
+      const patterns: string[] = s.filters.index_patterns?.length
+        ? s.filters.index_patterns
+        : ['']   // empty = global explore (all indices)
+      return patterns.map((ds) =>
+        apiClient
+          .get<{ total: number }>('/v1/documents', {
+            params: {
+              datasource:        ds || undefined,
+              query:             s.query || undefined,
+              filter_sentiment:  s.filters.sentiment || undefined,
+              filter_date_from:  s.filters.date_from || undefined,
+              filter_date_to:    s.filters.date_to   || undefined,
+              limit:             1,
+              offset:            0,
+            },
+          })
+          .then((r) => r.data.total ?? 0)
+          .catch(() => 0),
+      )
+    })
+
+    Promise.all(tasks).then((counts) => {
+      setEstimatedTotal(counts.reduce((a, b) => a + b, 0))
+      setEstimating(false)
+    })
+  }, [step, state.selectedSearchIds, searches])
+
   const reset = () => {
     setStep(0)
     setState(INITIAL)
@@ -82,6 +130,8 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
     setEnabledPlatforms(new Set())
     setPlatformUrls({})
     setPlatformDates({})
+    setEstimatedTotal(null)
+    setEstimating(false)
   }
 
   const handleClose = () => {
@@ -369,26 +419,36 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
                   the index is built — you can see progress on the investigation page.
                 </Text>
               </div>
-              <Space align="center">
+              <Space align="center" wrap>
                 <InputNumber
                   min={1}
-                  max={500}
+                  max={estimatedTotal ?? 500}
                   value={state.autoEnrichCount}
                   onChange={(v) => setState((s) => ({ ...s, autoEnrichCount: v ?? 20 }))}
                   style={{ width: 100 }}
-                  addonAfter="docs"
                 />
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  of <Text type="secondary" style={{ fontSize: 12 }}>
-                    <i>total (known after build)</i>
-                  </Text>
-                </Text>
+                <Text style={{ fontSize: 13 }}>of</Text>
+                {estimating ? (
+                  <Spin size="small" />
+                ) : estimatedTotal !== null ? (
+                  <Tag color="blue" style={{ fontSize: 13 }}>
+                    ~{estimatedTotal.toLocaleString()} docs
+                  </Tag>
+                ) : (
+                  <Tag icon={<QuestionCircleOutlined />} style={{ fontSize: 12 }}>
+                    select searches to see total
+                  </Tag>
+                )}
               </Space>
               <Alert
                 type="info"
                 showIcon
                 style={{ fontSize: 12 }}
-                message={`Each document takes ~10–30 s. Enriching ${state.autoEnrichCount} docs will run in parallel via the task queue.`}
+                message={
+                  estimatedTotal !== null
+                    ? `Enriching ${Math.min(state.autoEnrichCount, estimatedTotal)} of ~${estimatedTotal.toLocaleString()} documents. Each takes ~10–30 s via the task queue.`
+                    : `Each document takes ~10–30 s. Enrichment runs in parallel via the task queue.`
+                }
               />
             </Space>
           </div>

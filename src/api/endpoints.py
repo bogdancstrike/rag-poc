@@ -580,6 +580,7 @@ def documents_handler(app, operation, request, **kwargs):
     filter_classification = flask_request.args.get("filter_classification", "").strip() or None
     filter_date_from      = flask_request.args.get("filter_date_from", "").strip() or None
     filter_date_to        = flask_request.args.get("filter_date_to", "").strip() or None
+    filter_enriched       = flask_request.args.get("filter_enriched", "").strip().lower() in ("1", "true", "yes")
     index_pattern         = flask_request.args.get("index_pattern", "qsint_docs*").strip() or "qsint_docs*"
 
     filter_labels = [l.strip() for l in filter_labels_raw.split(",") if l.strip()] if filter_labels_raw else []
@@ -610,7 +611,7 @@ def documents_handler(app, operation, request, **kwargs):
             # Resolve PG-based filters to a set of matching doc IDs
             id_filter = None  # None means "no restriction"
 
-            if filter_status or filter_labels or filter_classification:
+            if filter_status or filter_labels or filter_classification or filter_enriched:
                 id_sets = []
 
                 if filter_status:
@@ -642,6 +643,13 @@ def documents_handler(app, operation, request, **kwargs):
                         enriched_data = [(e.doc_id, (e.payload or {}).get("classification", "") or "") for e in enriched_rows]
                     matching = {doc_id_e for doc_id_e, cls in enriched_data if fc_lower in cls.lower()}
                     id_sets.append(matching)
+
+                if filter_enriched:
+                    with get_db() as db:
+                        enriched_rows = db.query(DocumentEnrichment.doc_id).filter_by(
+                            datasource=datasource, status="complete"
+                        ).all()
+                    id_sets.append({r.doc_id for r in enriched_rows})
 
                 # Intersect all PG filter sets
                 if id_sets:

@@ -22,6 +22,7 @@ export interface DocumentFilters {
   date_from?: string
   date_to?: string
   index_patterns?: string[]
+  enriched?: boolean
 }
 
 export const fetchDocuments = async (
@@ -43,6 +44,7 @@ export const fetchDocuments = async (
   if (filters.index_patterns?.length) {
     params.index_pattern = filters.index_patterns.join(',')
   }
+  if (filters.enriched)            params.filter_enriched       = 'true'
   const { data } = await apiClient.get<{ documents: Document[]; total: number }>('/v1/documents', { params })
   return data
 }

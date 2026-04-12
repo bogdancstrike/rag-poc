@@ -330,11 +330,18 @@ Paginated document list with optional search and filters.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `datasource` | string | ES index name (required) |
+| `datasource` | string | ES index name (omit for multi-index global explore) |
 | `limit` | int | Page size (default 50) |
 | `offset` | int | Pagination offset |
-| `query` | string | Full-text search |
-| `sentiment` | string | Filter by sentiment |
+| `query` | string | Full-text search (Elasticsearch query string syntax) |
+| `filter_sentiment` | string | Filter by sentiment (`hostile`, `neutral`, `positive`, …) |
+| `filter_status` | string | Filter by analyst review status (`in_progress`, `done`) |
+| `filter_labels` | string | Comma-separated label values — all must match |
+| `filter_classification` | string | Substring match on enrichment classification |
+| `filter_date_from` | string | ISO date lower bound on `created_at` |
+| `filter_date_to` | string | ISO date upper bound on `created_at` |
+| `filter_enriched` | bool | `true` — return only AI-enriched documents |
+| `index_pattern` | string | Glob for multi-index search (default `qsint_docs*`) |
 
 ```bash
 curl "http://localhost:5100/rag/v1/documents?datasource=qsint_docs_cyber&limit=5&query=GRU"

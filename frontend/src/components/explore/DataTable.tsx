@@ -9,7 +9,7 @@ import {
   ReloadOutlined, RobotOutlined, FileTextOutlined,
   ClockCircleOutlined, CheckCircleOutlined, ApartmentOutlined,
   BugOutlined, EnvironmentOutlined, FieldTimeOutlined, TranslationOutlined,
-  TagsOutlined, FilterOutlined, ClearOutlined, PlusOutlined,
+  TagsOutlined, FilterOutlined, ClearOutlined, PlusOutlined, StarOutlined,
 } from '@ant-design/icons'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDocuments, useDocumentById, useMultiEnrichedDocIds, useEnrichDocument, useForceReenrich, useReloadEnrichmentField, useDocumentStatuses, useSetDocumentStatus, useDocumentLabels, useSetDocumentLabels } from '@/hooks/useExplore'
@@ -1244,6 +1244,21 @@ export function DataTable({
                 value={filters.classification ?? ''}
                 onChange={(e) => updateFilter('classification', e.target.value)}
               />
+            </Col>
+            <Col>
+              <Text type="secondary" style={{ fontSize: 11 }}>Enriched</Text>
+              <div style={{ marginTop: 6 }}>
+                <Tooltip title="Show only AI-enriched documents">
+                  <Button
+                    size="small"
+                    type={filters.enriched ? 'primary' : 'default'}
+                    icon={<StarOutlined />}
+                    onClick={() => updateFilter('enriched', filters.enriched ? undefined : true)}
+                  >
+                    {filters.enriched ? 'Enriched only' : 'All docs'}
+                  </Button>
+                </Tooltip>
+              </div>
             </Col>
             {activeFilterCount > 0 && (
               <Col style={{ marginTop: 16 }}>
