@@ -192,16 +192,20 @@ INSIGHTS_RELATIONSHIP_NETWORK_RULES = INSIGHTS_GRAPH_RULES
 # ── Per-field enrichment prompts ───────────────────────────────────────────────
 
 ENRICH_SENTIMENT_PROMPT = """Analyze the sentiment of the document.
-Output ONLY valid JSON: {"sentiment": "positive|negative|neutral|mixed|hostile"}"""
+Output ONLY valid JSON: {"sentiment": "positive|negative|neutral|mixed|hostile"}
+Stop immediately after the final '}'."""
 
 ENRICH_CLASSIFICATION_PROMPT = """Classify the document into an intelligence category.
-Output ONLY valid JSON: {"classification": "string (e.g., Cyber Threat, Geopolitics, Financial Crime, Intelligence Report, Disinformation)"}"""
+Output ONLY valid JSON: {"classification": "string (e.g., Cyber Threat, Geopolitics, Financial Crime, Intelligence Report, Disinformation)"}
+Stop immediately after the final '}'."""
 
 ENRICH_ENTITIES_PROMPT = """Extract named entities (people, organizations, locations, tools) from the document.
-Output ONLY valid JSON: {"entities": [{"name": "string", "type": "person|org|location|tool"}]}"""
+Output ONLY valid JSON: {"entities": [{"name": "string", "type": "person|org|location|tool"}]}
+Stop immediately after the final '}'."""
 
 ENRICH_SUMMARY_PROMPT = """Write a concise 1-2 sentence intelligence summary of the document.
-Output ONLY valid JSON: {"summary": "string"}"""
+Output ONLY valid JSON: {"summary": "string"}
+Stop immediately after the final '}'."""
 
 
 INSIGHTS_ENRICH_PROMPT = """You are an expert intelligence analyst.
@@ -228,6 +232,7 @@ FORMAT RULES:
 5. "locations": ONLY geographic place names (cities, countries, regions) — just names, no coordinates.
 6. "language": primary language code (e.g. "en", "ro", "fr", "ar", "ru").
 7. Do NOT include any other top-level keys.
+8. Stop immediately after the final '}'."""
 """
 
 ENRICH_GRAPH_PROMPT = """Extract a knowledge graph of entities and their relationships from the document.

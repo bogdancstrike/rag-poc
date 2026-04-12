@@ -525,7 +525,7 @@ class InsightsEngine:
             if result is not None:
                 return result
 
-        logger.warning(f"[insights] _parse_json exhausted all strategies. Raw[:200]: {raw[:200]}")
+        logger.warning(f"[insights] _parse_json exhausted all strategies. Raw: {raw}")
         return None
 
     @staticmethod

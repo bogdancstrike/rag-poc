@@ -10,6 +10,7 @@ import re
 import urllib.request
 import urllib.parse
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from flask import request as flask_request, Response, stream_with_context
@@ -715,16 +716,22 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
 
         # ── Step 1: Main LLM enrichment (all structured fields) ──────────────
         messages, system = builder.build_enrichment_messages(text[:3000])
+        
+        # Attempt 1: Standard Config (temp=0.1)
         raw = llm.complete_json(messages, system)
-        logger.debug(f"[enrich] raw LLM output (first 500): {raw[:500]!r}")
         payload = InsightsEngine._parse_json(raw)
+        
+        # Attempt 2: Higher temperature (0.3) if parsing failed
+        if payload is None:
+            logger.warning(f"[enrich] doc_id={doc_id} JSON parse fail, retrying with temperature=0.3...")
+            raw = llm.complete_json(messages, system, temperature=0.3)
+            payload = InsightsEngine._parse_json(raw)
+
         if payload is None:
             logger.error(f"[enrich] unparseable JSON for doc_id={doc_id}: {raw[:300]!r}")
             raise ValueError("Failed to parse enrichment JSON from LLM")
 
-        # Guard: the model sometimes returns a template/ready response instead of
-        # enrichment (e.g. when thinking is suppressed). Fail fast so we don't waste
-        # time on geocoding/translation with a garbage payload.
+        # Guard: check for expected keys
         _EXPECTED = {"summary", "sentiment", "classification", "entities"}
         if not any(k in payload for k in _EXPECTED):
             logger.error(f"[enrich] LLM returned non-enrichment JSON keys={list(payload.keys())} doc_id={doc_id}")
@@ -733,15 +740,19 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
         # ── Step 2: IOC extraction (regex, synchronous) ───────────────────────
         payload["iocs"] = _extract_iocs(text)
 
-        # ── Step 3: Geocode extracted location names via Nominatim ────────────
+        # ── Step 3: Parallel Geocode via Nominatim ────────────────────────────
         location_names = payload.pop("locations", []) or []
-        if isinstance(location_names, list):
+        if isinstance(location_names, list) and location_names:
+            # Use a small pool to respect Nominatim rate limits while still being faster than sequential
+            unique_names = list(set([n.strip() for n in location_names if isinstance(n, str) and n.strip()]))[:10]
             geocoded = []
-            for loc in location_names[:12]:
-                if isinstance(loc, str) and loc.strip():
-                    result = _geocode_location(loc.strip())
-                    if result:
-                        geocoded.append(result)
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                future_to_name = {executor.submit(_geocode_location, name): name for name in unique_names}
+                from concurrent.futures import as_completed
+                for future in as_completed(future_to_name):
+                    res = future.result()
+                    if res:
+                        geocoded.append(res)
             payload["locations"] = geocoded
 
         # ── Step 4: Translation (if document is not in Romanian) ─────────────
@@ -751,8 +762,15 @@ def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
                 t_msgs, t_sys = builder.build_translation_messages(text[:3000])
                 t_raw = llm.complete_json(t_msgs, t_sys)
                 t_data = InsightsEngine._parse_json(t_raw)
+                
+                # Retry translation if it failed
+                if not (t_data and t_data.get("text")):
+                    logger.warning(f"[enrich] Translation parse fail for doc_id={doc_id}, retrying with temp=0.3...")
+                    t_raw = llm.complete_json(t_msgs, t_sys, temperature=0.3)
+                    t_data = InsightsEngine._parse_json(t_raw)
+
                 if t_data and t_data.get("text"):
-                    payload["translation"] = t_data["text"]  # store plain string
+                    payload["translation"] = t_data["text"]
             except Exception as te:
                 logger.warning(f"[enrich] Translation failed for doc_id={doc_id}: {te}")
 
@@ -858,7 +876,7 @@ def document_enrich_stream_handler(app, operation, request, **kwargs):
 
             messages, system = builder.build_enrichment_messages(text[:3000])
             raw = llm.complete_json(messages, system)
-            logger.debug(f"[enrich_stream] raw LLM output (first 500): {raw[:500]!r}")
+            logger.debug(f"[enrich_stream] raw LLM output: {raw!r}")
             step1 = InsightsEngine._parse_json(raw)
             if step1 is None:
                 logger.error(f"[enrich_stream] unparseable raw (full): {raw!r}")
