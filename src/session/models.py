@@ -14,6 +14,7 @@ from sqlalchemy import (
     Column, String, Integer, Text, DateTime, JSON,
     ForeignKey, create_engine, Index, text, event, exc as sa_exc
 )
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 from src.config import Config
@@ -308,8 +309,7 @@ def get_engine():
     global _engine
     if _engine is None:
         kwargs = {"pool_pre_ping": True}
-        if Config.DATABASE_URL.startswith("postgresql"):
-            kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_recycle": 300})
+        kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_recycle": 300})
         _engine = create_engine(Config.DATABASE_URL, **kwargs)
 
         @event.listens_for(_engine, "checkout")

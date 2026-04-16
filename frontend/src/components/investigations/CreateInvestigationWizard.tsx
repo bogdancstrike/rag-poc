@@ -283,7 +283,7 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
         <Alert
           type="info"
           showIcon
-          message="No saved searches yet"
+          title="No saved searches yet"
           description="Go to Data Exploration → Advanced Search and save some queries first."
         />
       ) : (
@@ -309,13 +309,14 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
         type="warning"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Scraper integration — coming soon"
+        title="Scraper integration — coming soon"
         description="Configure data collection sources for future automated ingestion. These settings are saved with the investigation but scrapers are not yet active."
       />
       <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
         Enable platforms and enter source URLs to collect data automatically once scraping is live.
       </Text>
-      <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Space orientation="vertical"
+ style={{ width: '100%' }} size={8}>
         {PLATFORMS.map((p) => {
           const enabled = enabledPlatforms.has(p.key)
           return (
@@ -379,7 +380,8 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
         relationship graphs) once the investigation index is ready.
       </Text>
 
-      <Space direction="vertical" style={{ width: '100%' }} size={16}>
+      <Space orientation="vertical"
+ style={{ width: '100%' }} size={16}>
         <div
           style={{
             border: `1px solid ${token.colorBorderSecondary}`,
@@ -388,7 +390,8 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
           }}
         >
           <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical"
+ size={2}>
               <Text strong>Enable auto-enrichment</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 Queue enrichment tasks immediately after the index is built
@@ -409,7 +412,8 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
               padding: '12px 16px',
             }}
           >
-            <Space direction="vertical" style={{ width: '100%' }} size={10}>
+            <Space orientation="vertical"
+ style={{ width: '100%' }} size={10}>
               <div>
                 <Text strong style={{ fontSize: 13 }}>Documents to enrich</Text>
                 <br />
@@ -444,7 +448,7 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
                 type="info"
                 showIcon
                 style={{ fontSize: 12 }}
-                message={
+                title={
                   estimatedTotal !== null
                     ? `Enriching ${Math.min(state.autoEnrichCount, estimatedTotal)} of ~${estimatedTotal.toLocaleString()} documents. Each takes ~10–30 s via the task queue.`
                     : `Each document takes ~10–30 s. Enrichment runs in parallel via the task queue.`
@@ -458,7 +462,8 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
 
     // ── Step 4: Review ────────────────────────────────────────────────────────
     <div key="step4">
-      <Space direction="vertical" style={{ width: '100%' }} size={14}>
+      <Space orientation="vertical"
+ style={{ width: '100%' }} size={14}>
         {/* Name + description */}
         <div>
           <Text type="secondary" style={{ fontSize: 11 }}>NAME</Text>
@@ -530,7 +535,7 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
         <Alert
           type="info"
           showIcon
-          message="Index creation runs in the background"
+          title="Index creation runs in the background"
           description="After clicking Create, a background task builds the investigation index. Monitor progress in Task Monitor or on the investigation card."
         />
       </Space>

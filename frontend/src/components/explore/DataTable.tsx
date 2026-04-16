@@ -513,7 +513,7 @@ function LabelsSection({ datasource, docId, currentLabels, allKnownLabels }: Lab
 
   const handleRemove = (label: string) => {
     const next = currentLabels.filter((l) => l !== label)
-    setLabels.mutate({ docId, labels: next })
+    setLabels.mutate({ docId, labels: next, datasource })
   }
 
   const handleAdd = (value: string) => {
@@ -523,14 +523,14 @@ function LabelsSection({ datasource, docId, currentLabels, allKnownLabels }: Lab
       setInputVal('')
       return
     }
-    setLabels.mutate({ docId, labels: [...currentLabels, trimmed] })
+    setLabels.mutate({ docId, labels: [...currentLabels, trimmed], datasource })
     setInputVisible(false)
     setInputVal('')
   }
 
   const handleSelectExisting = (value: string) => {
     if (!currentLabels.includes(value)) {
-      setLabels.mutate({ docId, labels: [...currentLabels, value] })
+      setLabels.mutate({ docId, labels: [...currentLabels, value], datasource })
     }
   }
 
@@ -1055,9 +1055,17 @@ export function DataTable({
             style={{ width: 136 }}
             loading={setStatus.isPending && (setStatus.variables as any)?.docId === record.id}
             onChange={(val: DocReviewStatus | undefined) => {
-              setStatus.mutate({ docId: record.id, status: val ?? null })
+              setStatus.mutate({ 
+                docId: record.id, 
+                status: val ?? null, 
+                datasource: (record as any)._source_index 
+              })
             }}
-            onClear={() => setStatus.mutate({ docId: record.id, status: null })}
+            onClear={() => setStatus.mutate({ 
+              docId: record.id, 
+              status: null, 
+              datasource: (record as any)._source_index 
+            })}
             options={[
               {
                 value: 'in_progress',
@@ -1333,7 +1341,11 @@ export function DataTable({
               datasource={datasource || (expandedDoc as any)._source_index || ''}
               doc={expandedDoc}
               reviewStatus={statusMap?.[expandedDoc.id] ?? null}
-              onStatusChange={(status) => setStatus.mutate({ docId: expandedDoc.id, status })}
+              onStatusChange={(status) => setStatus.mutate({ 
+                docId: expandedDoc.id, 
+                status, 
+                datasource: (expandedDoc as any)._source_index || datasource 
+              })}
               onClose={() => selectDoc(null)}
               onSendToRag={onSendToRag}
               docLabels={labelsMap?.[expandedDoc.id] ?? []}

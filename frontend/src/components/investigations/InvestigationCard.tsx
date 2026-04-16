@@ -8,11 +8,12 @@ import type { Investigation } from '@/types'
 const { Text, Paragraph } = Typography
 
 const STATUS_CONFIG: Record<
-  Investigation['status'],
+  string,
   { color: string; icon: React.ReactNode; label: string }
 > = {
   creating: { color: 'processing', icon: <LoadingOutlined />,         label: 'Building…' },
   ready:    { color: 'success',    icon: <CheckCircleOutlined />,     label: 'Ready' },
+  ready_with_vectors: { color: 'success', icon: <CheckCircleOutlined />, label: 'Ready' },
   error:    { color: 'error',      icon: <ExclamationCircleOutlined />, label: 'Error' },
 }
 
@@ -23,21 +24,27 @@ interface Props {
 }
 
 export function InvestigationCard({ investigation: inv, onOpen, onDelete }: Props) {
-  const cfg = STATUS_CONFIG[inv.status]
+  const cfg = STATUS_CONFIG[inv.status] || { 
+    color: 'default', 
+    icon: <ExclamationCircleOutlined />, 
+    label: inv.status || 'Unknown' 
+  }
+
+  const isReady = inv.status === 'ready' || inv.status === 'ready_with_vectors'
 
   return (
     <Card
       size="small"
-      hoverable={inv.status === 'ready'}
-      onClick={() => inv.status === 'ready' && onOpen(inv)}
-      style={{ height: '100%', cursor: inv.status === 'ready' ? 'pointer' : 'default' }}
+      hoverable={isReady}
+      onClick={() => isReady && onOpen(inv)}
+      style={{ height: '100%', cursor: isReady ? 'pointer' : 'default' }}
       actions={[
         <Tooltip title="Open investigation" key="open">
           <Button
             type="link"
             size="small"
             icon={<FolderOpenOutlined />}
-            disabled={inv.status !== 'ready'}
+            disabled={!isReady}
             onClick={(e) => { e.stopPropagation(); onOpen(inv) }}
           >
             Open
@@ -78,8 +85,8 @@ export function InvestigationCard({ investigation: inv, onOpen, onDelete }: Prop
         </Paragraph>
       )}
 
-      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-        {inv.status === 'ready' && inv.doc_count !== null && (
+      <Space orientation="vertical" size={2} style={{ width: '100%' }}>
+        {isReady && inv.doc_count !== null && (
           <Space size={4}>
             <FileTextOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />
             <Text type="secondary" style={{ fontSize: 11 }}>

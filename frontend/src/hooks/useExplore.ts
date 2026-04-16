@@ -228,7 +228,7 @@ export function useDocumentStatuses(datasource: string) {
   return useQuery({
     queryKey: ['docStatuses', datasource],
     queryFn: () => fetchDocumentStatuses(datasource),
-    enabled: !!datasource,
+    enabled: datasource !== undefined, // Allow empty string for global explore
     staleTime: 30_000,
   })
 }
@@ -240,7 +240,9 @@ export function useSetDocumentStatus(datasource: string) {
     mutationFn: ({ docId, status, datasource: dsOverride }: { docId: string; status: DocReviewStatus | null; datasource?: string }) =>
       setDocumentStatus(dsOverride || datasource, docId, status),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ['docStatuses', vars.datasource || datasource] })
+      const ds = vars.datasource || datasource
+      qc.invalidateQueries({ queryKey: ['docStatuses', ds] })
+      if (ds) qc.invalidateQueries({ queryKey: ['docStatuses', ''] })
     },
   })
 }
@@ -250,7 +252,7 @@ export function useDocumentLabels(datasource: string) {
   return useQuery({
     queryKey: ['docLabels', datasource],
     queryFn: () => fetchDocumentLabels(datasource),
-    enabled: !!datasource,
+    enabled: datasource !== undefined,
     staleTime: 30_000,
   })
 }
@@ -262,7 +264,9 @@ export function useSetDocumentLabels(datasource: string) {
     mutationFn: ({ docId, labels, datasource: dsOverride }: { docId: string; labels: string[]; datasource?: string }) =>
       setDocumentLabels(dsOverride || datasource, docId, labels),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: ['docLabels', vars.datasource || datasource] })
+      const ds = vars.datasource || datasource
+      qc.invalidateQueries({ queryKey: ['docLabels', ds] })
+      if (ds) qc.invalidateQueries({ queryKey: ['docLabels', ''] })
     },
   })
 }

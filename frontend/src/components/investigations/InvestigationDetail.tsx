@@ -21,66 +21,64 @@ interface Props {
   id: string
 }
 
-/**
- * Fetch the first `count` documents from the investigation index and queue
- * enrichment for each one. Fires and forgets — errors are shown as notifications.
- */
-async function triggerAutoEnrichment(indexName: string, count: number) {
-  notification.info({
-    message: 'Auto-enrichment starting',
-    description: `Fetching up to ${count} documents to enrich…`,
-    icon: <ThunderboltOutlined style={{ color: '#faad14' }} />,
-    duration: 4,
-  })
-
-  try {
-    const resp = await apiClient.get<{ documents: any[]; total: number }>(
-      '/v1/documents',
-      { params: { datasource: indexName, limit: count, offset: 0 } },
-    )
-    const docs  = resp.data.documents ?? []
-    const total = resp.data.total ?? 0
-    const batch = docs.slice(0, count)
-
-    if (batch.length === 0) {
-      notification.warning({ message: 'Auto-enrichment', description: 'No documents found in index.' })
-      return
-    }
-
-    notification.success({
-      message: 'Auto-enrichment queued',
-      description: `Enriching ${batch.length} of ${total} documents. Monitor progress in the Data tab.`,
-      icon: <ThunderboltOutlined style={{ color: '#52c41a' }} />,
-      duration: 6,
-    })
-
-    // Fire enrichment requests in parallel (backend queues via Kafka anyway)
-    await Promise.allSettled(
-      batch.map((doc: any) =>
-        apiClient.post('/v1/documents/enrich', {
-          doc_id:     doc.id,
-          datasource: indexName,
-          text:       doc.text || doc.content || doc.body || '',
-        }).catch(() => {}),  // silent per-doc errors — task queue handles retries
-      ),
-    )
-  } catch (e: any) {
-    notification.error({
-      message: 'Auto-enrichment failed',
-      description: e?.message || 'Could not fetch documents from the investigation index.',
-    })
-  }
-}
-
-const VALID_TABS = ['data', 'insights', 'chat'] as const
-type TabKey = typeof VALID_TABS[number]
-
 export function InvestigationDetail({ id }: Props) {
   const navigate = useNavigate()
   const location = useLocation()
   const { token } = theme.useToken()
   const [searchParams, setSearchParams] = useSearchParams()
   const { data: investigation, isLoading, error } = useInvestigation(id)
+  const [api, contextHolder] = notification.useNotification()
+
+  /**
+   * Fetch the first `count` documents from the investigation index and queue
+   * enrichment for each one.
+   */
+  const triggerAutoEnrichment = async (indexName: string, count: number) => {
+    api.info({
+      title: 'Auto-enrichment starting',
+      description: `Fetching up to ${count} documents to enrich…`,
+      icon: <ThunderboltOutlined style={{ color: '#faad14' }} />,
+      duration: 4,
+    })
+
+    try {
+      const resp = await apiClient.get<{ documents: any[]; total: number }>(
+        '/v1/documents',
+        { params: { datasource: indexName, limit: count, offset: 0 } },
+      )
+      const docs  = resp.data.documents ?? []
+      const total = resp.data.total ?? 0
+      const batch = docs.slice(0, count)
+
+      if (batch.length === 0) {
+        api.warning({ title: 'Auto-enrichment', description: 'No documents found in index.' })
+        return
+      }
+
+      api.success({
+        title: 'Auto-enrichment queued',
+        description: `Enriching ${batch.length} of ${total} documents. Monitor progress in the Data tab.`,
+        icon: <ThunderboltOutlined style={{ color: '#52c41a' }} />,
+        duration: 6,
+      })
+
+      // Fire enrichment requests in parallel (backend queues via Kafka anyway)
+      await Promise.allSettled(
+        batch.map((doc: any) =>
+          apiClient.post('/v1/documents/enrich', {
+            doc_id:     doc.id,
+            datasource: indexName,
+            text:       doc.text || doc.content || doc.body || '',
+          }).catch(() => {}),
+        ),
+      )
+    } catch (e: any) {
+      api.error({
+        title: 'Auto-enrichment failed',
+        description: e?.message || 'Could not fetch documents from the investigation index.',
+      })
+    }
+  }
 
   const [activeTab, setActiveTab] = useState<TabKey>(() => {
     const t = searchParams.get('tab') as TabKey | null
@@ -104,9 +102,10 @@ export function InvestigationDetail({ id }: Props) {
 
   // Trigger auto-enrichment once the investigation transitions to "ready"
   useEffect(() => {
+    const isReady = investigation?.status === 'ready' || investigation?.status === 'ready_with_vectors'
     if (
       autoEnrichCount > 0 &&
-      investigation?.status === 'ready' &&
+      isReady &&
       investigation?.index_name &&
       !enrichTriggeredRef.current
     ) {
@@ -142,10 +141,11 @@ export function InvestigationDetail({ id }: Props) {
   if (error || !investigation) {
     return (
       <div style={{ padding: 24 }}>
+        {contextHolder}
         <Alert
           type="error"
           showIcon
-          message="Investigation not found"
+          title="Investigation not found"
           description={
             <Button onClick={() => navigate('/investigations')} size="small" style={{ marginTop: 8 }}>
               Back to Investigations
@@ -183,10 +183,10 @@ export function InvestigationDetail({ id }: Props) {
           {inv.status === 'creating' && (
             <Tag icon={<LoadingOutlined />} color="processing">Building index…</Tag>
           )}
-          {inv.status === 'ready' && inv.doc_count !== null && (
+          {(inv.status === 'ready' || inv.status === 'ready_with_vectors') && inv.doc_count !== null && (
             <Tag color="success">{inv.doc_count.toLocaleString()} docs</Tag>
           )}
-          {inv.status === 'ready' && autoEnrichCount > 0 && (
+          {(inv.status === 'ready' || inv.status === 'ready_with_vectors') && autoEnrichCount > 0 && (
             <Tag icon={<ThunderboltOutlined />} color="gold">
               Auto-enriching {Math.min(autoEnrichCount, inv.doc_count ?? autoEnrichCount)} of {inv.doc_count ?? '?'}
             </Tag>
@@ -211,6 +211,7 @@ export function InvestigationDetail({ id }: Props) {
   if (inv.status === 'creating') {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {contextHolder}
         {header}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 16 }}>
           <Spin size="large" />
@@ -227,12 +228,13 @@ export function InvestigationDetail({ id }: Props) {
   if (inv.status === 'error') {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {contextHolder}
         {header}
         <div style={{ padding: 24 }}>
           <Alert
             type="error"
             showIcon
-            message="Investigation creation failed"
+            title="Investigation creation failed"
             description={inv.error_msg || 'An unknown error occurred while building the index.'}
           />
         </div>
@@ -295,6 +297,7 @@ export function InvestigationDetail({ id }: Props) {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {contextHolder}
       {header}
       <Tabs
         activeKey={activeTab}

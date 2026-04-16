@@ -1702,10 +1702,11 @@ def documents_status_handler(app, operation, request, **kwargs):
 
     if method == "GET":
         datasource = flask_request.args.get("datasource")
-        if not datasource:
-            return {"error": "datasource is required"}, 400
         with get_db() as db:
-            rows = db.query(DocumentStatus).filter_by(datasource=datasource).all()
+            query = db.query(DocumentStatus)
+            if datasource:
+                query = query.filter_by(datasource=datasource)
+            rows = query.all()
             statuses = {r.doc_id: r.status for r in rows}
         return {"statuses": statuses}, 200
 
@@ -1748,10 +1749,11 @@ def documents_labels_handler(app, operation, request, **kwargs):
 
     if method == "GET":
         datasource = flask_request.args.get("datasource")
-        if not datasource:
-            return {"error": "datasource is required"}, 400
         with get_db() as db:
-            rows = db.query(DocumentLabel).filter_by(datasource=datasource).all()
+            query = db.query(DocumentLabel)
+            if datasource:
+                query = query.filter_by(datasource=datasource)
+            rows = query.all()
             labels_map = {r.doc_id: r.labels or [] for r in rows}
         return {"labels": labels_map}, 200
 

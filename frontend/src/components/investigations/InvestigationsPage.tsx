@@ -9,7 +9,9 @@ import { CreateInvestigationWizard } from './CreateInvestigationWizard'
 import { useInvestigations, useDeleteInvestigation } from '@/hooks/useInvestigations'
 import type { Investigation } from '@/types'
 
-const { Title, Text } = Typography
+import { PageHeader } from '../common/PageHeader'
+
+const { Text } = Typography
 
 export function InvestigationsPage() {
   const { token } = theme.useToken()
@@ -32,43 +34,30 @@ export function InvestigationsPage() {
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
-      <div
-        style={{
-          padding: '12px 20px',
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          background: token.colorBgContainer,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <Space>
-          <ApartmentOutlined style={{ fontSize: 16, color: token.colorPrimary }} />
-          <Title level={5} style={{ margin: 0 }}>Investigations</Title>
-          {investigations && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              ({investigations.length})
-            </Text>
-          )}
-        </Space>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setShowCreate(true)}
-        >
-          Create Investigation
-        </Button>
-      </div>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '0 20px 24px' }}>
+      <PageHeader 
+        title="Investigations" 
+        icon={<ApartmentOutlined />}
+        subtitle="Manage focused intelligence workspaces."
+        info="Investigations aggregate documents from multiple saved searches into dedicated workspaces. Each investigation supports specialized reports and RAG Chat."
+        extra={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setShowCreate(true)}
+            size="small"
+          >
+            Create Investigation
+          </Button>
+        }
+      />
 
       {/* Body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+      <div style={{ flex: 1, overflowY: 'auto' }}>
         {isLoading ? (
           <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>
         ) : error ? (
-          <Alert type="error" message="Failed to load investigations" showIcon />
+          <Alert type="error" title="Failed to load investigations" showIcon />
         ) : !investigations?.length ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}

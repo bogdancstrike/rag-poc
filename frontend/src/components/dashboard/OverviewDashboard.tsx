@@ -129,7 +129,7 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
                     </Space>
                   }
                   value={s.value}
-                  valueStyle={{ fontSize: 24, fontWeight: 600, color: s.color }}
+                  styles={{ content: { fontSize: 24, fontWeight: 600, color: s.color } }}
                 />
               </Card>
             </Col>
