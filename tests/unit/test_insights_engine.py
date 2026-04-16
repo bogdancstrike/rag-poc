@@ -117,7 +117,7 @@ class TestEmptyJsonHandling:
     def test_empty_json_does_not_raise(self, engine):
         """`{}` from LLM should be stored as complete with empty payload, not an error."""
         sample = [{"id": "1", "text": "doc1"}]
-        with patch("src.rag.insights_engine.get_llm") as mock_llm:
+        with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = "{}"
             with patch.object(engine, "_set_task_status") as mock_status:
                 with patch("src.session.models.get_db"):
@@ -129,7 +129,7 @@ class TestEmptyJsonHandling:
 
     def test_empty_json_does_not_set_error_status(self, engine):
         sample = [{"id": "1", "text": "doc1"}]
-        with patch("src.rag.insights_engine.get_llm") as mock_llm:
+        with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = "{}"
             with patch.object(engine, "_set_task_status") as mock_status:
                 with patch("src.session.models.get_db"):
@@ -141,7 +141,7 @@ class TestEmptyJsonHandling:
     def test_unparseable_json_sets_error_status(self, engine):
         """Completely unparseable output (None from _parse_json) → error status."""
         sample = [{"id": "1", "text": "doc1"}]
-        with patch("src.rag.insights_engine.get_llm") as mock_llm:
+        with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = "totally unparseable garbage !!!"
             with patch.object(engine, "_set_task_status") as mock_status:
                 with patch("src.session.models.get_db"):
@@ -156,7 +156,7 @@ class TestEmptyJsonHandling:
 class TestRunStatsTask:
 
     def test_sets_complete_status_with_payload(self, engine):
-        with patch("src.rag.retriever.get_retriever") as mock_ret:
+        with patch("src.insights.engine.get_retriever") as mock_ret:
             mock_ret.return_value.get_status.return_value = {"doc_count": 100}
             mock_ret.return_value.get_aggregations.return_value = {}
             with patch.object(engine, "_set_task_status") as mock_status:
@@ -167,7 +167,7 @@ class TestRunStatsTask:
         assert len(complete_calls) == 1
 
     def test_stats_payload_is_dict(self, engine):
-        with patch("src.rag.retriever.get_retriever") as mock_ret:
+        with patch("src.insights.engine.get_retriever") as mock_ret:
             mock_ret.return_value.get_status.return_value = {"doc_count": 50}
             mock_ret.return_value.get_aggregations.return_value = {}
             with patch.object(engine, "_set_task_status") as mock_status:
@@ -185,7 +185,7 @@ class TestRunAiTask:
 
     def test_calls_llm_complete_json(self, engine):
         sample = [{"id": "1", "text": "doc1"}]
-        with patch("src.rag.insights_engine.get_llm") as mock_llm:
+        with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = '{"hot_topics": []}'
             with patch.object(engine, "_set_task_status"):
                 with patch("src.session.models.get_db"):
@@ -194,7 +194,7 @@ class TestRunAiTask:
 
     def test_complete_status_on_success(self, engine):
         sample = [{"id": "1", "text": "doc1"}]
-        with patch("src.rag.insights_engine.get_llm") as mock_llm:
+        with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = '{"hot_topics": []}'
             with patch.object(engine, "_set_task_status") as mock_status:
                 with patch("src.session.models.get_db"):
@@ -205,7 +205,7 @@ class TestRunAiTask:
 
     def test_error_status_on_llm_exception(self, engine):
         sample = [{"id": "1", "text": "doc1"}]
-        with patch("src.rag.insights_engine.get_llm") as mock_llm:
+        with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.side_effect = RuntimeError("LLM crashed")
             with patch.object(engine, "_set_task_status") as mock_status:
                 with patch("src.session.models.get_db"):

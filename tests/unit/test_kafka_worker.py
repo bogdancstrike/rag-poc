@@ -175,7 +175,7 @@ class TestDispatchTask:
     def test_routes_to_correct_handler(self, task_type, handler_name):
         from src.worker.task_handlers import dispatch_task
 
-        with patch(f"src.worker.task_handlers.{handler_name}") as mock_handler:
+        with patch(f"src.tasking.handlers.{handler_name}") as mock_handler:
             task = {"task_type": task_type, "datasource": "ds"}
             dispatch_task(task)
 
@@ -185,7 +185,7 @@ class TestDispatchTask:
         """dispatch_task should log a warning for unknown types, not raise."""
         from src.worker.task_handlers import dispatch_task
 
-        with patch("src.worker.task_handlers.logger") as mock_log:
+        with patch("src.tasking.handlers.logger") as mock_log:
             dispatch_task({"task_type": "totally_unknown", "datasource": "ds"})
 
         mock_log.warning.assert_called_once()
@@ -194,9 +194,9 @@ class TestDispatchTask:
         """If a handler crashes, dispatch_task catches and logs the error."""
         from src.worker.task_handlers import dispatch_task
 
-        with patch("src.worker.task_handlers.handle_insight_coordinator",
+        with patch("src.tasking.handlers.handle_insight_coordinator",
                    side_effect=RuntimeError("boom")):
-            with patch("src.worker.task_handlers.logger") as mock_log:
+            with patch("src.tasking.handlers.logger") as mock_log:
                 dispatch_task({"task_type": "insight_coordinator", "datasource": "ds"})
 
         mock_log.error.assert_called_once()
@@ -212,7 +212,7 @@ class TestHandleInsightCoordinator:
         """handle_insight_coordinator should call engine.run_all_insights, not fan-out via Kafka."""
         mock_engine = MagicMock()
 
-        with patch("src.rag.insights_engine.get_insights_engine", return_value=mock_engine):
+        with patch("src.insights.engine.get_insights_engine", return_value=mock_engine):
             from src.worker.task_handlers import handle_insight_coordinator
             handle_insight_coordinator({"datasource": "my_ds"})
 
@@ -222,7 +222,7 @@ class TestHandleInsightCoordinator:
         """force flag is forwarded correctly."""
         mock_engine = MagicMock()
 
-        with patch("src.rag.insights_engine.get_insights_engine", return_value=mock_engine):
+        with patch("src.insights.engine.get_insights_engine", return_value=mock_engine):
             from src.worker.task_handlers import handle_insight_coordinator
             handle_insight_coordinator({"datasource": "ds", "force": True})
 
@@ -239,7 +239,7 @@ class TestHandleInsightCoordinatorNoDocs:
         """run_all_insights handles the no-docs case internally; coordinator just delegates."""
         mock_engine = MagicMock()
 
-        with patch("src.rag.insights_engine.get_insights_engine", return_value=mock_engine):
+        with patch("src.insights.engine.get_insights_engine", return_value=mock_engine):
             from src.worker.task_handlers import handle_insight_coordinator
             handle_insight_coordinator({"datasource": "empty_ds"})
 
@@ -254,17 +254,10 @@ class TestHandleInsightCoordinatorNoDocs:
 class TestHandleEnrichDoc:
 
     def test_calls_run_enrichment_background(self):
-        """handle_enrich_doc imports _run_enrichment_background lazily from endpoints."""
-        import sys
+        """handle_enrich_doc calls run_enrichment_background from enrichment pipeline."""
         mock_enrich = MagicMock()
-        mock_endpoints = MagicMock()
-        mock_endpoints._run_enrichment_background = mock_enrich
 
-        with patch.dict("sys.modules", {"src.api.endpoints": mock_endpoints}):
-            # Reload to pick up the patched module map
-            if "src.worker.task_handlers" in sys.modules:
-                del sys.modules["src.worker.task_handlers"]
-
+        with patch("src.enrichment.pipeline.run_enrichment_background", mock_enrich):
             from src.worker.task_handlers import handle_enrich_doc
 
             task = {"task_type": "enrich_doc", "datasource": "ds1",
@@ -295,17 +288,10 @@ class TestHandleEnrichFieldIocs:
         ))
         mock_db_ctx.__exit__ = MagicMock(return_value=False)
 
-        import sys
+        mock_extract = MagicMock(return_value=mock_iocs)
 
-        mock_endpoints_module = MagicMock()
-        mock_endpoints_module._extract_iocs = MagicMock(return_value=mock_iocs)
-        mock_endpoints_module._geocode_location = MagicMock()
-
-        with patch.dict("sys.modules", {"src.api.endpoints": mock_endpoints_module}):
-            if "src.worker.task_handlers" in sys.modules:
-                del sys.modules["src.worker.task_handlers"]
-
-            with patch("src.session.models.get_db", return_value=mock_db_ctx):
+        with patch("src.core.db.get_db", return_value=mock_db_ctx):
+            with patch("src.enrichment.pipeline.extract_iocs", mock_extract):
                 from src.worker.task_handlers import handle_enrich_field
 
                 task = {
@@ -317,10 +303,7 @@ class TestHandleEnrichFieldIocs:
                 }
                 handle_enrich_field(task)
 
-        mock_endpoints_module._extract_iocs.assert_called_once_with("test text 192.168.1.1")
-        # LLM should not be called for iocs
-        mock_endpoints_module.get_llm = MagicMock()
-        # Confirm get_llm was not invoked (it's not on the endpoints mock but we can check it wasn't patched in)
+        mock_extract.assert_called_once_with("test text 192.168.1.1")
 
 
 # ===========================================================================
@@ -349,27 +332,19 @@ class TestHandleEnrichFieldSentiment:
 
         import sys
 
-        mock_endpoints_module = MagicMock()
-        mock_endpoints_module._extract_iocs = MagicMock()
-        mock_endpoints_module._geocode_location = MagicMock()
+        with patch("src.core.db.get_db", return_value=mock_db_ctx):
+            with patch("src.llm.client.get_llm", return_value=mock_llm):
+                with patch("src.llm.prompts.PromptBuilder", return_value=mock_builder):
+                    from src.worker.task_handlers import handle_enrich_field
 
-        with patch.dict("sys.modules", {"src.api.endpoints": mock_endpoints_module}):
-            if "src.worker.task_handlers" in sys.modules:
-                del sys.modules["src.worker.task_handlers"]
-
-            with patch("src.session.models.get_db", return_value=mock_db_ctx):
-                with patch("src.rag.llm_client.get_llm", return_value=mock_llm):
-                    with patch("src.rag.prompt_builder.PromptBuilder", return_value=mock_builder):
-                        from src.worker.task_handlers import handle_enrich_field
-
-                        task = {
-                            "task_type": "enrich_field",
-                            "datasource": "ds",
-                            "doc_id": "doc2",
-                            "text": "some text about events",
-                            "field": "sentiment",
-                        }
-                        handle_enrich_field(task)
+                    task = {
+                        "task_type": "enrich_field",
+                        "datasource": "ds",
+                        "doc_id": "doc2",
+                        "text": "some text about events",
+                        "field": "sentiment",
+                    }
+                    handle_enrich_field(task)
 
         mock_llm.complete_json.assert_called_once_with(["msg"], "sys")
         mock_builder.build_field_enrichment_messages.assert_called_once_with(

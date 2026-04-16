@@ -18,6 +18,22 @@ A production-grade **Retrieval-Augmented Generation (RAG)** platform for OSINT a
 
 ## 1. Architecture
 
+The backend is structured as a **modulith** — a single deployable unit with enforced internal module boundaries. Each domain module owns its ORM models, business logic, and service layer. Old import paths are kept as thin re-export shims for backward compatibility.
+
+### Backend Module Graph
+
+```
+core          ← nobody        (DB infrastructure: Base, get_db, init_db)
+retrieval     → core          (ESClient, EmbeddingClient, Retriever)
+llm           → core          (LLMClient, PromptBuilder)
+chat          → core          (Session, Message ORM + service)
+insights      → core, retrieval, llm, tasking  (InsightsEngine, InsightsEventBus, InsightsCache ORM)
+enrichment    → core, retrieval, llm            (DocumentEnrichment ORM + pipeline)
+investigations→ core, retrieval                 (Investigation ORM + service)
+tasking       → core          (Kafka producer/consumer, task handlers)
+api           → all modules   (HTTP + SSE handlers)
+```
+
 ```mermaid
 flowchart TB
     subgraph Browser["Browser — React SPA"]
@@ -28,51 +44,50 @@ flowchart TB
         Router --> Index["/index/:idx\nData · Intelligence · Chat"]
     end
 
-    subgraph Backend["Python Backend — Flask / gevent"]
+    subgraph Backend["Python Backend — Flask / gevent (modulith)"]
         direction TB
-        EP["endpoints.py · HTTP + SSE handlers"]
-        IE["InsightsEngine · Task Orchestrator"]
-        EB["InsightsEventBus · SSE pub/sub"]
-        PB["PromptBuilder · Dynamic prompt assembly"]
-        LC["LLMClient · Auto-discovering OpenAI-compat client"]
-        RT["Retriever · BM25 / Hybrid search"]
-        EP --> IE
-        EP --> RT
-        EP --> LC
-        IE --> EB
-        IE --> PB
-        PB --> LC
+        API["src/api/ · HTTP + SSE handlers"]
+        INSIGHTS["src/insights/\nInsightsEngine · EventBus"]
+        CHAT["src/chat/\nSession · Message"]
+        ENRICH["src/enrichment/\nPipeline · IOC extraction"]
+        INV["src/investigations/\nSavedSearch · Investigation"]
+        RETRIEVAL["src/retrieval/\nESClient · Retriever"]
+        LLM["src/llm/\nLLMClient · PromptBuilder"]
+        TASKING["src/tasking/\nKafka producer · consumer · handlers"]
+        CORE["src/core/\nDB Base · get_db · init_db"]
+        API --> INSIGHTS & CHAT & ENRICH & INV & RETRIEVAL & LLM & TASKING
+        INSIGHTS --> RETRIEVAL & LLM & TASKING
+        ENRICH --> RETRIEVAL & LLM & TASKING
+        INV --> RETRIEVAL
+        TASKING --> CORE
+        RETRIEVAL & LLM & CHAT & INSIGHTS & ENRICH & INV --> CORE
     end
 
     subgraph Messaging["Task Queue"]
         Kafka["Kafka 3.7\nTopics: llm_tasks · fast_tasks"]
     end
 
-    subgraph Workers["Async Workers"]
-        Worker["Kafka Consumer · Thread-pool executor"]
-        Worker --> IE
-    end
-
     subgraph Storage["Data Storage"]
         ES["Elasticsearch 8 · qsint_docs_*"]
-        PG["PostgreSQL 15 · Sessions · Tasks · Labels"]
+        PG["PostgreSQL 15 · chat · tasks · labels"]
         Redis["Redis 7 · Framework cache"]
     end
 
-    subgraph LLM["Local AI"]
-        Ollama["Ollama · GPU Accelerated (RTX 3080)"]
+    subgraph AI["Local AI"]
+        SGLang["SGLang · GPU Accelerated\n(primary, 2-3× faster)"]
+        Ollama["Ollama · fallback"]
     end
 
     subgraph Tracing["Observability"]
         Jaeger["Jaeger · OTLP distributed tracing"]
     end
 
-    Browser -- "REST + SSE" --> Backend
+    Browser -- "REST + SSE /rag/*" --> Backend
     Backend -- "Publishes tasks" --> Kafka
-    Kafka -- "Consumed by" --> Worker
-    Backend -- "BM25 queries" --> ES
+    Kafka -- "Consumed by" --> TASKING
+    Backend -- "BM25 / hybrid queries" --> ES
     Backend -- "ORM (SQLAlchemy)" --> PG
-    Worker -- "LLM inference" --> Ollama
+    TASKING -- "LLM inference" --> SGLang
     Backend -- "spans" --> Jaeger
 ```
 

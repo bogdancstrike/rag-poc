@@ -21,7 +21,7 @@ from framework.tracing import get_tracer
 from src.config import Config
 
 tracer = get_tracer()
-from src.session.session_service import (
+from src.chat.service import (
     create_session,
     get_session,
     list_sessions,
@@ -31,10 +31,10 @@ from src.session.session_service import (
     get_messages,
     get_recent_messages,
 )
-from src.rag.retriever import get_retriever
-from src.rag.llm_client import get_llm
-from src.rag.prompt_builder import PromptBuilder
-from src.rag.insights_engine import get_insights_engine
+from src.retrieval.retriever import get_retriever
+from src.llm.client import get_llm
+from src.llm.prompts import PromptBuilder
+from src.insights.engine import get_insights_engine
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -52,61 +52,13 @@ def _cors_headers():
     }
 
 
-# ── IOC extraction ─────────────────────────────────────────────────────────────
+# ── IOC / geocoding — delegated to enrichment module ─────────────────────────
 
-_RE_IP       = re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b')
-_RE_URL      = re.compile(r'https?://[^\s<>"\'{}|\\^`\[\]]+', re.IGNORECASE)
-_RE_EMAIL    = re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,7}\b')
-_RE_MD5      = re.compile(r'\b[a-fA-F0-9]{32}\b')
-_RE_SHA1     = re.compile(r'\b[a-fA-F0-9]{40}\b')
-_RE_SHA256   = re.compile(r'\b[a-fA-F0-9]{64}\b')
-_RE_CVE      = re.compile(r'\bCVE-\d{4}-\d{4,7}\b', re.IGNORECASE)
-_RE_PATH     = re.compile(r'(?:/(?:etc|var|home|tmp|usr|bin|sbin|opt|root|proc|sys|data|log)[/\w.\-]*|[A-Za-z]:\\[^\s<>"\']+)')
-_RE_HASHTAG  = re.compile(r'#[\w\u0400-\u04FF\u0600-\u06FF]{2,}')
-_RE_DOMAIN   = re.compile(
-    r'\b(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|gov|mil|edu|info|biz|onion'
-    r'|ru|cn|de|uk|fr|nl|xyz|app|cloud|online|site|tech|int|us|ca|au|jp|kr|br|in|pl|se|no|dk|fi)\b',
-    re.IGNORECASE,
+from src.enrichment.pipeline import (
+    extract_iocs as _extract_iocs,
+    geocode_location as _geocode_location,
+    run_enrichment_background as _run_enrichment_background,
 )
-
-
-def _extract_iocs(text: str) -> dict:
-    """Regex-based Indicator of Compromise extraction — no LLM required."""
-    urls  = list(set(_RE_URL.findall(text)))
-    clean = _RE_URL.sub(' ', text)          # avoid double-matching domains inside URLs
-    hashes = list(set(_RE_MD5.findall(text) + _RE_SHA1.findall(text) + _RE_SHA256.findall(text)))
-    return {
-        "ips":        list(set(_RE_IP.findall(text))),
-        "domains":    [d for d in set(_RE_DOMAIN.findall(clean)) if len(d) > 4],
-        "urls":       urls,
-        "emails":     list(set(_RE_EMAIL.findall(text))),
-        "hashes":     hashes,
-        "cves":       list(set(_RE_CVE.findall(text))),
-        "file_paths": list(set(_RE_PATH.findall(text))),
-        "hashtags":   list(set(_RE_HASHTAG.findall(text))),
-    }
-
-
-def _geocode_location(name: str) -> dict | None:
-    """Geocode a place name via Nominatim (OpenStreetMap). Returns None on failure."""
-    try:
-        params = urllib.parse.urlencode({"q": name, "format": "json", "limit": 1})
-        req = urllib.request.Request(
-            f"https://nominatim.openstreetmap.org/search?{params}",
-            headers={"User-Agent": "QSINT-RAG-Intelligence-Platform/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            results = json.loads(resp.read().decode())
-        if results:
-            return {
-                "name":         name,
-                "lat":          float(results[0]["lat"]),
-                "lon":          float(results[0]["lon"]),
-                "display_name": results[0].get("display_name", name),
-            }
-    except Exception as e:
-        logger.warning(f"[geocode] '{name}': {e}")
-    return None
 
 
 # ── Health ─────────────────────────────────────────────────────────────────────
@@ -543,7 +495,7 @@ def datasource_indices_handler(app, operation, request, **kwargs):
     """GET /v1/datasource/indices — return a list of available indices."""
     with tracer.start_as_current_span("api.datasource.indices") as span:
         try:
-            from src.datasource.es_client import ESClient
+            from src.retrieval.es_client import ESClient
             client = ESClient()
             indices = client.list_indices()
             return {"indices": indices}, 200
@@ -589,8 +541,10 @@ def documents_handler(app, operation, request, **kwargs):
     with tracer.start_as_current_span("api.documents") as span:
         span.set_attribute("documents.datasource", datasource or "all")
         try:
-            from src.datasource.es_client import ESClient
-            from src.session.models import DocumentStatus, DocumentLabel, DocumentEnrichment, get_db
+            from src.retrieval.es_client import ESClient
+            from src.investigations.models import DocumentStatus, DocumentLabel
+            from src.enrichment.models import DocumentEnrichment
+            from src.core.db import get_db
 
             client = ESClient()
 
@@ -679,7 +633,8 @@ def documents_enriched_handler(app, operation, request, **kwargs):
     Query params: datasource (required)
     Returns: { "doc_ids": ["id1", "id2", ...] }
     """
-    from src.session.models import DocumentEnrichment, get_db
+    from src.enrichment.models import DocumentEnrichment
+    from src.core.db import get_db
     datasource = flask_request.args.get("datasource")
     if not datasource:
         return {"error": "datasource is required"}, 400
@@ -695,113 +650,6 @@ def documents_enriched_handler(app, operation, request, **kwargs):
         logger.error(f"[api] documents_enriched_handler error: {e}")
         return {"error": str(e)}, 500
 
-
-def _run_enrichment_background(datasource: str, doc_id: str, text: str) -> None:
-    """Background worker: run full document enrichment and persist result.
-
-    Called via ThreadPoolExecutor so the HTTP thread never blocks on LLM calls.
-    """
-    from src.session.models import DocumentEnrichment, get_db
-    from src.rag.llm_client import get_llm
-    from src.rag.prompt_builder import PromptBuilder
-    from src.rag.insights_engine import InsightsEngine
-
-    # Mark as processing and record started_at
-    try:
-        with get_db() as db:
-            row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-            if row:
-                row.status = "processing"
-                row.started_at = datetime.now(timezone.utc)
-                db.commit()
-                logger.info(f"[enrich] Document {doc_id} status → processing")
-    except Exception as e:
-        logger.error(f"[enrich] DB pre-update failed: {e}")
-        return
-
-    try:
-        builder = PromptBuilder()
-        llm = get_llm()
-
-        # ── Step 1: Main LLM enrichment (all structured fields) ──────────────
-        messages, system = builder.build_enrichment_messages(text[:3000])
-        
-        # Attempt 1: Standard Config (temp=0.1)
-        raw = llm.complete_json(messages, system)
-        payload = InsightsEngine._parse_json(raw)
-        
-        # Attempt 2: Higher temperature (0.3) if parsing failed
-        if payload is None:
-            logger.warning(f"[enrich] doc_id={doc_id} JSON parse fail, retrying with temperature=0.3...")
-            raw = llm.complete_json(messages, system, temperature=0.3)
-            payload = InsightsEngine._parse_json(raw)
-
-        if payload is None:
-            logger.error(f"[enrich] unparseable JSON for doc_id={doc_id}: {raw[:300]!r}")
-            raise ValueError("Failed to parse enrichment JSON from LLM")
-
-        # Guard: check for expected keys
-        _EXPECTED = {"summary", "sentiment", "classification", "entities"}
-        if not any(k in payload for k in _EXPECTED):
-            logger.error(f"[enrich] LLM returned non-enrichment JSON keys={list(payload.keys())} doc_id={doc_id}")
-            raise ValueError(f"LLM did not enrich the document (got keys: {list(payload.keys())})")
-
-        # ── Step 2: IOC extraction (regex, synchronous) ───────────────────────
-        payload["iocs"] = _extract_iocs(text)
-
-        # ── Step 3: Parallel Geocode via Nominatim ────────────────────────────
-        location_names = payload.pop("locations", []) or []
-        if isinstance(location_names, list) and location_names:
-            # Use a small pool to respect Nominatim rate limits while still being faster than sequential
-            unique_names = list(set([n.strip() for n in location_names if isinstance(n, str) and n.strip()]))[:10]
-            geocoded = []
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                future_to_name = {executor.submit(_geocode_location, name): name for name in unique_names}
-                from concurrent.futures import as_completed
-                for future in as_completed(future_to_name):
-                    res = future.result()
-                    if res:
-                        geocoded.append(res)
-            payload["locations"] = geocoded
-
-        # ── Step 4: Translation (if document is not in Romanian) ─────────────
-        doc_lang = (payload.get("language") or "en").lower()
-        if doc_lang not in ("ro", "ron", "rum"):
-            try:
-                t_msgs, t_sys = builder.build_translation_messages(text[:3000])
-                t_raw = llm.complete_json(t_msgs, t_sys)
-                t_data = InsightsEngine._parse_json(t_raw)
-                
-                # Retry translation if it failed
-                if not (t_data and t_data.get("text")):
-                    logger.warning(f"[enrich] Translation parse fail for doc_id={doc_id}, retrying with temp=0.3...")
-                    t_raw = llm.complete_json(t_msgs, t_sys, temperature=0.3)
-                    t_data = InsightsEngine._parse_json(t_raw)
-
-                if t_data and t_data.get("text"):
-                    payload["translation"] = t_data["text"]
-            except Exception as te:
-                logger.warning(f"[enrich] Translation failed for doc_id={doc_id}: {te}")
-
-        with get_db() as db:
-            row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-            if row:
-                row.status = "complete"
-                row.payload = payload
-                row.error = None
-                db.commit()
-                logger.info(f"[enrich] Complete: doc_id={doc_id}", "magenta")
-    except Exception as e:
-        logger.error(f"[enrich] Failed doc_id={doc_id}: {e}", exc_info=True)
-        try:
-            with get_db() as db:
-                row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
-                if row:
-                    row.status = "error"
-                    row.error = str(e)
-                    db.commit()
-        except Exception as db_err:
-            logger.error(f"[enrich] DB error-update failed: {db_err}")
 
 
 def document_enrich_stream_handler(app, operation, request, **kwargs):
@@ -835,10 +683,11 @@ def document_enrich_stream_handler(app, operation, request, **kwargs):
     logger.info(f"[enrich] ▶ stream started doc_id={doc_id} ds={datasource} force={force}", "green")
 
     def generate():
-        from src.session.models import DocumentEnrichment, get_db
-        from src.rag.llm_client import get_llm
-        from src.rag.prompt_builder import PromptBuilder
-        from src.rag.insights_engine import InsightsEngine
+        from src.enrichment.models import DocumentEnrichment
+        from src.core.db import get_db
+        from src.llm.client import get_llm
+        from src.llm.prompts import PromptBuilder
+        from src.insights.engine import InsightsEngine
 
         # ── Check cache (read-only — no status writes yet) ───────────────────
         try:
@@ -973,7 +822,8 @@ def document_enrichment_handler(app, operation, request, **kwargs):
         span.set_attribute("enrich.datasource", datasource)
         span.set_attribute("enrich.force", force)
 
-        from src.session.models import DocumentEnrichment, get_db
+        from src.enrichment.models import DocumentEnrichment
+        from src.core.db import get_db
 
         with get_db() as db:
             row = db.query(DocumentEnrichment).filter_by(doc_id=doc_id, datasource=datasource).first()
@@ -999,7 +849,7 @@ def document_enrichment_handler(app, operation, request, **kwargs):
             db.commit()
             result = row.to_dict()
 
-        from src.worker.kafka_producer import publish_task
+        from src.tasking.producer import publish_task
         publish_task({"task_type": "enrich_doc", "datasource": datasource, "doc_id": doc_id, "text": text})
         span.set_attribute("enrich.cache_hit", False)
         return result, 202
@@ -1030,7 +880,8 @@ def document_enrich_field_handler(app, operation, request, **kwargs):
         span.set_attribute("enrich.doc_id", doc_id)
         span.set_attribute("enrich.field", field)
 
-        from src.session.models import DocumentEnrichment, get_db
+        from src.enrichment.models import DocumentEnrichment
+        from src.core.db import get_db
 
         # Mark the field as refreshing (keep existing payload)
         with get_db() as db:
@@ -1041,7 +892,7 @@ def document_enrich_field_handler(app, operation, request, **kwargs):
             db.commit()
             result = row.to_dict()
 
-        from src.worker.kafka_producer import publish_task
+        from src.tasking.producer import publish_task
         publish_task({"task_type": "enrich_field", "datasource": datasource,
                       "doc_id": doc_id, "text": text, "field": field})
         return result, 202
@@ -1056,7 +907,7 @@ def insights_stream_handler(app, operation, request, **kwargs):
     """
     datasource = flask_request.args.get("datasource", "default")
 
-    from src.rag.insights_engine import get_insights_engine, _event_bus
+    from src.insights.engine import get_insights_engine, _event_bus
 
     def generate():
         engine = get_insights_engine()
@@ -1110,8 +961,8 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
 
         try:
             if category == "insight":
-                from src.rag.insights_engine import get_insights_engine
-                from src.worker.kafka_producer import publish_task
+                from src.insights.engine import get_insights_engine
+                from src.tasking.producer import publish_task
                 engine = get_insights_engine()
 
                 # Publish only the specific task that was requested, not the coordinator
@@ -1139,8 +990,9 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
 
             elif category == "enrichment":
                 # doc_id == task; fetch text from ES and re-run enrichment
-                from src.datasource.es_client import ESClient
-                from src.session.models import DocumentEnrichment, get_db
+                from src.retrieval.es_client import ESClient
+                from src.enrichment.models import DocumentEnrichment
+                from src.core.db import get_db
 
                 client = ESClient()
                 text = client.get_document_text(doc_id=task, index_name=datasource)
@@ -1156,7 +1008,7 @@ def dashboard_task_restart_handler(app, operation, request, **kwargs):
                         row.payload = None
                         db.commit()
 
-                from src.worker.kafka_producer import publish_task
+                from src.tasking.producer import publish_task
                 publish_task({"task_type": "enrich_doc", "datasource": datasource,
                               "doc_id": task, "text": text})
                 return {"status": "restarted", "task": task, "category": category}, 200
@@ -1185,7 +1037,9 @@ def dashboard_task_clear_handler(app, operation, request, **kwargs):
         span.set_attribute("task.datasource", datasource)
 
         try:
-            from src.session.models import InsightsCache, DocumentEnrichment, get_db
+            from src.insights.models import InsightsCache
+            from src.enrichment.models import DocumentEnrichment
+            from src.core.db import get_db
 
             with get_db() as db:
                 if category == "insight":
@@ -1217,14 +1071,14 @@ def task_refresh_handler(app, operation, request, **kwargs):
         
     with tracer.start_as_current_span("api.insights.task.refresh") as span:
         try:
-            from src.rag.insights_engine import get_insights_engine
+            from src.insights.engine import get_insights_engine
             engine = get_insights_engine()
             current = engine._load_all_from_cache(datasource)
             sample_hash = "manual_refresh"
             if current and task in current:
                 sample_hash = current[task].get("sample_hash", "manual_refresh")
 
-            from src.rag.retriever import get_retriever
+            from src.retrieval.retriever import get_retriever
             import hashlib
             retriever = get_retriever()
             sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
@@ -1234,7 +1088,7 @@ def task_refresh_handler(app, operation, request, **kwargs):
 
             engine._set_task_status(datasource, task, "pending", sample_hash, clear_data=True)
 
-            from src.worker.kafka_producer import publish_task
+            from src.tasking.producer import publish_task
             stats_tasks = ["corpus_statistics", "top_regions", "top_entities", "top_platforms"]
             
             if task in stats_tasks or task == "stats":
@@ -1252,7 +1106,7 @@ def dashboard_tasks_handler(app, operation, request, **kwargs):
     """GET /v1/dashboard/tasks — get platform-wide task status."""
     with tracer.start_as_current_span("api.dashboard.tasks") as span:
         try:
-            from src.rag.insights_engine import get_insights_engine
+            from src.insights.engine import get_insights_engine
             engine = get_insights_engine()
             data = engine.get_all_tasks()
             return data, 200
@@ -1263,8 +1117,10 @@ def dashboard_tasks_handler(app, operation, request, **kwargs):
 
 def restart_active_tasks_handler(app, operation, request, **kwargs):
     """POST /v1/tasks/restart-active — bulk restart all pending/processing tasks."""
-    from src.session.models import InsightsCache, DocumentEnrichment, get_db
-    from src.worker.kafka_producer import publish_task
+    from src.insights.models import InsightsCache
+    from src.enrichment.models import DocumentEnrichment
+    from src.core.db import get_db
+    from src.tasking.producer import publish_task
 
     with tracer.start_as_current_span("api.tasks.restart_active") as span:
         try:
@@ -1329,7 +1185,9 @@ def tasks_list_handler(app, operation, request, **kwargs):
         created_before : ISO timestamp
     """
     from datetime import datetime, timezone
-    from src.session.models import InsightsCache, DocumentEnrichment, get_db
+    from src.insights.models import InsightsCache
+    from src.enrichment.models import DocumentEnrichment
+    from src.core.db import get_db
 
     status_f     = flask_request.args.get("status", "")
     category_f   = flask_request.args.get("category", "")
@@ -1467,7 +1325,9 @@ def task_detail_handler(app, operation, request, task_id: str = "", **kwargs):
     task_id format: insight__{datasource}__{insight_type}
                     enrichment__{datasource}__{doc_id}
     """
-    from src.session.models import InsightsCache, DocumentEnrichment, get_db
+    from src.insights.models import InsightsCache
+    from src.enrichment.models import DocumentEnrichment
+    from src.core.db import get_db
 
     parts = task_id.split("__", 2)
     if len(parts) != 3:
@@ -1696,7 +1556,8 @@ def documents_status_handler(app, operation, request, **kwargs):
     POST { datasource, doc_id, status }
          status = "in_progress" | "done" | null (null clears the status)
     """
-    from src.session.models import DocumentStatus, get_db
+    from src.investigations.models import DocumentStatus
+    from src.core.db import get_db
 
     method = flask_request.method
 
@@ -1743,7 +1604,8 @@ def documents_labels_handler(app, operation, request, **kwargs):
     POST { datasource, doc_id, labels: ["label1", "label2"] }
          Pass labels=[] to clear all labels for the document.
     """
-    from src.session.models import DocumentLabel, get_db
+    from src.investigations.models import DocumentLabel
+    from src.core.db import get_db
 
     method = flask_request.method
 
@@ -1795,7 +1657,7 @@ def searches_handler(app, operation, request, **kwargs):
 
     POST body: { name, description?, query?, filters? }
     """
-    from src.session.session_service import list_saved_searches, create_saved_search
+    from src.investigations.service import list_saved_searches, create_saved_search
 
     method = flask_request.method
 
@@ -1834,7 +1696,7 @@ def search_detail_handler(app, operation, request, search_id: str = "", **kwargs
     if not sid:
         return {"error": "search_id is required"}, 400
 
-    from src.session.session_service import update_saved_search, delete_saved_search
+    from src.investigations.service import update_saved_search, delete_saved_search
 
     method = flask_request.method
 
@@ -1879,7 +1741,7 @@ def investigations_handler(app, operation, request, **kwargs):
       2. Publishes a "create_investigation" task to the fast-task topic
       3. Returns 202 Accepted with the investigation dict
     """
-    from src.session.session_service import list_investigations, create_investigation
+    from src.investigations.service import list_investigations, create_investigation
 
     method = flask_request.method
 
@@ -1907,7 +1769,7 @@ def investigations_handler(app, operation, request, **kwargs):
         )
 
         # Publish background task after DB commit
-        from src.worker.kafka_producer import publish_task
+        from src.tasking.producer import publish_task
         publish_task({
             "task_type":        "create_investigation",
             "investigation_id": inv["id"],
@@ -1929,7 +1791,7 @@ def investigation_detail_handler(app, operation, request, investigation_id: str 
     if not iid:
         return {"error": "investigation_id is required"}, 400
 
-    from src.session.session_service import get_investigation, delete_investigation
+    from src.investigations.service import get_investigation, delete_investigation
 
     method = flask_request.method
 
@@ -1951,7 +1813,7 @@ def investigation_detail_handler(app, operation, request, investigation_id: str 
 
         # Best-effort ES index deletion — don't fail the whole request if it errors
         try:
-            from src.datasource.es_client import ESClient
+            from src.retrieval.es_client import ESClient
             ESClient().delete_index(index_name)
         except Exception as es_err:
             logger.warning(f"[api] ES index deletion failed for '{index_name}': {es_err}")
