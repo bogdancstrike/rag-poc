@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { Layout, Input, Button, Typography, Space, theme, Empty, Spin, Avatar, Tag } from 'antd'
+import { Layout, Input, Button, Typography, Space, theme, Spin, Avatar, Tag } from 'antd'
 import { SendOutlined, StopOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useChat } from '@/hooks/useChat'
 import { useMessages } from '@/hooks/useSessions'
 import { SessionSidebar } from './SessionSidebar'
 import { MessageBubble } from './MessageBubble'
+import { PageHeader } from '../common/PageHeader'
 import type { Message } from '@/types'
 
-const { Content, Header } = Layout
+const { Content } = Layout
 const { Text, Title } = Typography
 const { TextArea } = Input
 
@@ -90,40 +91,20 @@ export function ChatPanel({ datasource, prefillQuery, onPrefillConsumed }: Props
       <SessionSidebar datasource={datasource} collapsed={sidebarCollapsed} />
 
       <Layout style={{ background: 'transparent', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* Modern Header */}
-        <Header style={{ 
-          background: token.colorBgContainer, 
-          padding: '0 20px', 
-          height: 56, 
-          lineHeight: '56px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          zIndex: 10
-        }}>
-          <Space size={12}>
-            <Avatar size="small" icon={<RobotOutlined />} style={{ backgroundColor: token.colorInfo }} />
-            <Title level={5} style={{ margin: 0, fontSize: 15 }}>
-              Intelligence Assistant
-            </Title>
-            {activeSessionId && (
-              <Tag color="default" style={{ margin: 0, fontSize: 10 }}>
-                ACTIVE SESSION
-              </Tag>
-            )}
-          </Space>
-          
-          <Button 
-            type="primary" 
-            icon={<PlusOutlined />} 
-            onClick={handleNewChat}
-            size="small"
-            style={{ borderRadius: 6 }}
-          >
-            New Investigation
-          </Button>
-        </Header>
+        <div style={{ padding: '0 20px', background: token.colorBgContainer }}>
+          <PageHeader 
+            title="Intelligence Assistant" 
+            icon={<RobotOutlined />}
+            info="Uses hybrid RAG (Semantic + Keyword) to synthesize answers from the intelligence corpus. Every claim is cited with source documents."
+            extra={
+              activeSessionId ? (
+                <Tag color="processing" style={{ margin: 0, fontSize: 10, borderRadius: 4 }}>
+                  ACTIVE SESSION
+                </Tag>
+              ) : null
+            }
+          />
+        </div>
 
         {/* Messages area */}
         <Content

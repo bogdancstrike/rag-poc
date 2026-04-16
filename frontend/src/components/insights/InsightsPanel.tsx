@@ -1,12 +1,11 @@
 import {
   Row, Col, Card, Spin, Alert, Button, Tag, Typography, Space, Tooltip,
-  Divider, theme, Table, List, Badge, Progress,
+  theme, Table, List, Badge,
 } from 'antd'
 import {
   ReloadOutlined, FireOutlined, RiseOutlined, WarningOutlined, BookOutlined,
   ClockCircleOutlined, SyncOutlined, BarChartOutlined, NodeIndexOutlined,
-  DeleteOutlined, SendOutlined,
-  GlobalOutlined, AlertOutlined, MessageOutlined,
+  DeleteOutlined, SendOutlined, AlertOutlined, MessageOutlined, BulbOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
@@ -15,25 +14,13 @@ import { useInsights, useRefreshInsights, useDeleteInsights, useRefreshTask } fr
 import { TrendAreaChart } from './TrendAreaChart'
 import { RelationshipGraph } from './RelationshipGraph'
 import { WordCloud } from './WordCloud'
+import { PageHeader } from '../common/PageHeader'
+import { SentimentTag } from '../common/IntelligenceTags'
 
 dayjs.extend(utc)
 dayjs.extend(relativeTime)
 
 const { Title, Text, Paragraph } = Typography
-
-/** Normalise any LLM sentiment value to the three canonical values. */
-function normaliseSentiment(raw?: string): 'positive' | 'negative' | 'neutral' {
-  const s = (raw || '').toLowerCase()
-  if (s === 'positive' || s === 'supportive') return 'positive'
-  if (s === 'negative' || s === 'hostile' || s === 'mixed') return 'negative'
-  return 'neutral'
-}
-
-const SENTIMENT_COLOR: Record<string, string> = {
-  positive: 'success',
-  negative: 'error',
-  neutral:  'default',
-}
 
 const DIRECTION_ICON: Record<string, any> = {
   rising:  <span style={{ color: '#52c41a' }}>↑</span>,
@@ -108,19 +95,19 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
     badge?: 'ai' | 'static',
   ) => (
     <Row justify="space-between" align="middle" style={{ width: '100%' }}>
-      <Space>
+      <Space size={10}>
         {icon}
-        <Text strong>{title}</Text>
+        <Text strong style={{ fontSize: 14 }}>{title}</Text>
         {badge === 'ai' && (
-          <Tag color="purple" style={{ fontSize: 10, margin: 0 }}>AI</Tag>
+          <Tag color="purple" style={{ fontSize: 9, margin: 0, borderRadius: 4, fontWeight: 600 }}>AI ANALYZED</Tag>
         )}
         {badge === 'static' && (
-          <Tag color="cyan" style={{ fontSize: 10, margin: 0 }}>STATIC</Tag>
+          <Tag color="cyan" style={{ fontSize: 9, margin: 0, borderRadius: 4, fontWeight: 600 }}>AGGREGATED</Tag>
         )}
       </Space>
       <Space>
         {(task.status === 'processing' || task.status === 'pending') && (
-          <SyncOutlined spin style={{ color: token.colorPrimary }} />
+          <SyncOutlined spin style={{ color: token.colorPrimary, fontSize: 12 }} />
         )}
         {task.status === 'error' && (
           <Space>
@@ -152,10 +139,10 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
   )
 
   const staticCols = [
-    { title: 'Label', dataIndex: 'label', key: 'label', render: (v: string) => <Text>{v}</Text> },
+    { title: 'Label', dataIndex: 'label', key: 'label', render: (v: string) => <Text style={{ fontSize: 12 }}>{v}</Text> },
     {
       title: 'Count', dataIndex: 'value', key: 'value', width: 70, align: 'right' as const,
-      render: (v: number) => <Badge count={v} color="blue" overflowCount={9999} />,
+      render: (v: number) => <Badge count={v} color="blue" overflowCount={9999} style={{ fontSize: 10 }} />,
     },
   ]
 
@@ -192,50 +179,41 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
 
   /** ── Full intelligence report tab content ── */
   const reportTab = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, padding: '0 20px 24px' }}>
 
-      {/* Header bar */}
-      <Card
-        variant="borderless"
-        styles={{ body: { padding: '10px 16px' } }}
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-      >
-        <Row align="middle" justify="space-between">
-          <Space>
-            <FireOutlined style={{ color: token.colorWarning }} />
-            <Text strong style={{ fontSize: 13 }}>Intelligence Report</Text>
-            {isProcessing && <Tag color="processing" icon={<SyncOutlined spin />}>UPDATING</Tag>}
-            <Text style={{ fontSize: 11, color: token.colorTextDescription }}>
+      <PageHeader 
+        title="Intelligence Report" 
+        icon={<BulbOutlined />}
+        subtitle={`Automated synthesis of ${datasource} intelligence corpus.`}
+        info="Multi-task AI analysis identifying emerging narratives, sentiment trends, and entity networks. High-level summaries are generated using semantic sampling."
+        extra={
+          <Space size={8}>
+            <Text style={{ fontSize: 11, color: token.colorTextDescription, marginRight: 8 }}>
               <ClockCircleOutlined style={{ marginRight: 4 }} />
-              {generatedAt}
+              Updated {generatedAt}
             </Text>
-          </Space>
-          <Space size={6}>
             {onSendToRag && (
-              <Tooltip title="Send current intelligence data to RAG Chat">
-                <Button
-                  size="small"
-                  icon={<SendOutlined />}
-                  onClick={handleSendInsightsToRag}
-                  disabled={!topicsTask.payload && !narrativesTask.payload}
-                >
-                  Send to RAG
-                </Button>
-              </Tooltip>
-            )}
-            <Tooltip title="Delete cached insights and re-generate">
               <Button
                 size="small"
-                danger
-                icon={<DeleteOutlined />}
-                loading={deleteMut.isPending}
-                onClick={() => deleteMut.mutate()}
+                icon={<SendOutlined />}
+                onClick={handleSendInsightsToRag}
+                disabled={!topicsTask.payload && !narrativesTask.payload}
               >
-                Clear
+                Send to RAG
               </Button>
-            </Tooltip>
+            )}
             <Button
               size="small"
+              danger
+              icon={<DeleteOutlined />}
+              loading={deleteMut.isPending}
+              onClick={() => deleteMut.mutate()}
+            >
+              Clear
+            </Button>
+            <Button
+              size="small"
+              type="primary"
               icon={<ReloadOutlined />}
               loading={refreshMut.isPending || isProcessing}
               onClick={() => refreshMut.mutate()}
@@ -243,40 +221,55 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
               Refresh
             </Button>
           </Space>
-        </Row>
-      </Card>
+        }
+      />
+
+      {isProcessing && (
+        <Alert 
+          message="Intelligence synthesis in progress" 
+          description="AI agents are currently analyzing the corpus. Sections will update automatically as they complete."
+          type="info"
+          showIcon
+          icon={<SyncOutlined spin />}
+          style={{ borderRadius: 8 }}
+        />
+      )}
 
       {/* ── Corpus Statistics (Combined Fast Tasks) ── */}
       <Card
         variant="borderless"
         title={renderTaskHeader('Corpus Statistics', statsTask,
           <BarChartOutlined style={{ color: token.colorInfo }} />, 'corpus_statistics', 'static')}
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+        style={{ border: `1px solid ${token.colorBorderSecondary}`, boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}
         styles={{ body: { padding: '12px 16px 16px' } }}
       >
         {statsTask.payload ? (
           <div>
-            <Row gutter={16} align="top">
+            <Row gutter={24} align="top">
               {/* Doc count */}
-              <Col span={4}>
+              <Col span={5}>
                 <div style={{
                   textAlign: 'center',
                   background: token.colorFillAlter,
-                  padding: '14px 8px',
-                  borderRadius: token.borderRadius,
+                  padding: '24px 8px',
+                  borderRadius: 8,
                   border: `1px solid ${token.colorBorderSecondary}`,
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center'
                 }}>
-                  <Text type="secondary" style={{ fontSize: 10, display: 'block' }}>TOTAL DOCS</Text>
-                  <Title level={3} style={{ margin: 0, color: token.colorPrimary }}>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>TOTAL DOCUMENTS</Text>
+                  <Title level={2} style={{ margin: 0, color: token.colorPrimary }}>
                     {statsTask.payload.doc_count?.toLocaleString()}
                   </Title>
                 </div>
               </Col>
               {/* Stats tables */}
-              <Col span={20}>
-                <Row gutter={12}>
+              <Col span={19}>
+                <Row gutter={16}>
                   <Col span={8}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <Text strong style={{ fontSize: 12 }}>Top Platforms</Text>
                       {platformsTask.status === 'processing' && <SyncOutlined spin style={{ fontSize: 10 }} />}
                     </div>
@@ -291,7 +284,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                     />
                   </Col>
                   <Col span={8}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <Text strong style={{ fontSize: 12 }}>Top Regions</Text>
                       {regionsTask.status === 'processing' && <SyncOutlined spin style={{ fontSize: 10 }} />}
                     </div>
@@ -306,7 +299,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                     />
                   </Col>
                   <Col span={8}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <Text strong style={{ fontSize: 12 }}>Top Entities</Text>
                       {entitiesTask.status === 'processing' && <SyncOutlined spin style={{ fontSize: 10 }} />}
                     </div>
@@ -326,9 +319,9 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
 
             {/* Word cloud from topics */}
             {statsTask.payload.topics?.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <Text strong style={{ fontSize: 12 }}>Topic Word Cloud</Text>
-                <div style={{ marginTop: 8 }}>
+              <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+                <Text strong style={{ fontSize: 12 }}>Key Topic Distribution</Text>
+                <div style={{ marginTop: 12 }}>
                   <WordCloud
                     words={statsTask.payload.topics.map((t: any) => ({
                       label: t.label,
@@ -344,140 +337,127 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
         ) : renderLoading()}
       </Card>
 
-      {/* ── Hot Topics ── */}
-      <Card
-        variant="borderless"
-        title={renderTaskHeader('Hot Topics & Sentiment', topicsTask,
-          <FireOutlined style={{ color: token.colorWarning }} />, 'hot_topics_sentiment', 'ai')}
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-        styles={{ body: { padding: '8px 16px 16px' } }}
-      >
-        {topicsTask.payload ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {(topicsTask.payload.hot_topics || []).map((t: any, i: number) => {
-              const sent = normaliseSentiment(t.sentiment_label)
-              const sentColor =
-                sent === 'positive' ? token.colorSuccess :
-                sent === 'negative' ? token.colorError :
-                token.colorTextSecondary
-              const bgColor =
-                sent === 'positive' ? 'rgba(82,196,26,0.06)' :
-                sent === 'negative' ? 'rgba(255,77,79,0.06)' :
-                token.colorFillAlter
-              
-              return (
-                <div
-                  key={i}
-                  style={{
-                    background: bgColor,
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                    borderLeft: `3px solid ${sentColor}`,
-                    borderRadius: token.borderRadius,
-                    padding: '8px 12px',
-                  }}
-                >
-                  <Row align="middle" justify="space-between" wrap={false}>
-                    <Space size={8} style={{ flex: 1, minWidth: 0 }}>
-                      <Text strong style={{ fontSize: 13 }}>{t.topic}</Text>
-                      <Tag
-                        color={SENTIMENT_COLOR[sent]}
-                        style={{ fontSize: 10, margin: 0, flexShrink: 0 }}
-                      >
-                        {(t.sentiment_label || sent).toUpperCase()}
-                      </Tag>
-                    </Space>
-                    <Space size={6} style={{ flexShrink: 0, marginLeft: 12 }}>
-                      <Tooltip title={`Ask RAG Chat about "${t.topic}"`}>
+      <Row gutter={[20, 20]}>
+        <Col span={12}>
+          {/* ── Hot Topics ── */}
+          <Card
+            variant="borderless"
+            title={renderTaskHeader('Hot Topics & Sentiment', topicsTask,
+              <FireOutlined style={{ color: token.colorWarning }} />, 'hot_topics_sentiment', 'ai')}
+            style={{ border: `1px solid ${token.colorBorderSecondary}`, boxShadow: '0 1px 2px rgba(0,0,0,0.03)', height: '100%' }}
+            styles={{ body: { padding: '12px 16px 16px' } }}
+          >
+            {topicsTask.payload ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {(topicsTask.payload.hot_topics || []).map((t: any, i: number) => (
+                  <div
+                    key={i}
+                    style={{
+                      background: token.colorBgLayout,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                    }}
+                  >
+                    <Row align="middle" justify="space-between" wrap={false}>
+                      <Space size={8} style={{ flex: 1, minWidth: 0 }}>
+                        <Text strong style={{ fontSize: 13 }}>{t.topic}</Text>
+                        <SentimentTag value={t.sentiment_label} />
+                      </Space>
+                      <Tooltip title={`Ask Assistant about "${t.topic}"`}>
                         <Button
                           size="small"
-                          type="primary"
-                          ghost
-                          icon={<MessageOutlined />}
+                          type="text"
+                          icon={<MessageOutlined style={{ color: token.colorPrimary }} />}
                           onClick={() => onAskAbout(`What can you tell me about "${t.topic}"? Include sentiment analysis, key actors, and any notable developments.`)}
-                        >
-                          Ask AI
-                        </Button>
+                        />
                       </Tooltip>
-                    </Space>
-                  </Row>
-                  {t.brief_context && (
-                    <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-                      {t.brief_context}
-                    </Text>
+                    </Row>
+                    {t.brief_context && (
+                      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6, lineHeight: 1.4 }}>
+                        {t.brief_context}
+                      </Text>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : renderLoading()}
+          </Card>
+        </Col>
+
+        <Col span={12}>
+          {/* ── Active Narratives ── */}
+          <Card
+            variant="borderless"
+            title={renderTaskHeader('Active Narratives', narrativesTask,
+              <BookOutlined style={{ color: '#fa541c' }} />, 'active_narratives', 'ai')}
+            style={{ border: `1px solid ${token.colorBorderSecondary}`, boxShadow: '0 1px 2px rgba(0,0,0,0.03)', height: '100%' }}
+            styles={{ body: { padding: '12px 16px 16px' } }}
+          >
+            {narrativesTask.payload ? (
+              narrativesTask.payload.active_narratives?.length > 0 ? (
+                <List
+                  size="small"
+                  dataSource={(narrativesTask.payload.active_narratives || []).slice(0, 5)}
+                  renderItem={(narrative: any, i: number) => (
+                    <List.Item
+                      key={i}
+                      style={{ padding: '12px 0' }}
+                      actions={[
+                        <Tooltip key="ask" title="Analyze Narrative">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<MessageOutlined style={{ color: token.colorPrimary }} />}
+                            onClick={() => onAskAbout(`Tell me more about the narrative: "${narrative.title}"`)}
+                          />
+                        </Tooltip>,
+                      ]}
+                    >
+                      <List.Item.Meta
+                        avatar={<AlertOutlined style={{ color: '#fa541c', fontSize: 16, marginTop: 4 }} />}
+                        title={<Text strong style={{ fontSize: 13 }}>{narrative.title}</Text>}
+                        description={
+                          <div>
+                            <Paragraph style={{ margin: '4px 0', fontSize: 12, lineHeight: 1.5 }}>
+                              {narrative.description}
+                            </Paragraph>
+                            {narrative.key_actors?.length > 0 && (
+                              <div style={{ marginTop: 4 }}>
+                                {narrative.key_actors.map((actor: string) => (
+                                  <Tag key={actor} size="small" style={{ fontSize: 9, borderRadius: 3 }}>{actor}</Tag>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        }
+                      />
+                    </List.Item>
                   )}
+                />
+              ) : (
+                <div style={{ padding: '20px 0', textAlign: 'center' }}>
+                  <Text type="secondary">No significant narratives detected</Text>
                 </div>
               )
-            })}
-          </div>
-        ) : renderLoading()}
-      </Card>
-
-      {/* ── Active Narratives ── */}
-      <Card
-        variant="borderless"
-        title={renderTaskHeader('Active Narratives', narrativesTask,
-          <BookOutlined style={{ color: '#fa541c' }} />, 'active_narratives', 'ai')}
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-        styles={{ body: { padding: '8px 16px 16px' } }}
-      >
-        {narrativesTask.payload ? (
-          narrativesTask.payload.active_narratives?.length > 0 ? (
-            <List
-              size="small"
-              dataSource={(narrativesTask.payload.active_narratives || []).slice(0, 5)}
-              renderItem={(narrative: any, i: number) => (
-                <List.Item
-                  key={i}
-                  actions={[
-                    <Button
-                      key="ask"
-                      size="small"
-                      type="link"
-                      onClick={() => onAskAbout(`Tell me more about the narrative: "${narrative.title}"`)}
-                    >
-                      Ask AI
-                    </Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    avatar={<AlertOutlined style={{ color: '#fa541c', fontSize: 16, marginTop: 2 }} />}
-                    title={<Text strong style={{ fontSize: 13 }}>{narrative.title}</Text>}
-                    description={
-                      <div>
-                        <Paragraph style={{ margin: '4px 0', fontSize: 13 }}>
-                          {narrative.description}
-                        </Paragraph>
-                        {narrative.key_actors?.length > 0 && (
-                          <Text type="secondary" style={{ fontSize: 11 }}>
-                            Actors: {narrative.key_actors.join(', ')}
-                          </Text>
-                        )}
-                      </div>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-          ) : (
-            <Text type="secondary">No significant narratives detected</Text>
-          )
-        ) : renderLoading()}
-      </Card>
+            ) : renderLoading()}
+          </Card>
+        </Col>
+      </Row>
 
       {/* ── Trending Signals ── */}
       <Card
         variant="borderless"
         title={renderTaskHeader('Trending Signals', trendingTask,
           <RiseOutlined style={{ color: token.colorSuccess }} />, 'trending_signals', 'ai')}
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-        styles={{ body: { padding: '8px 16px 16px' } }}
+        style={{ border: `1px solid ${token.colorBorderSecondary}`, boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}
+        styles={{ body: { padding: '12px 16px 16px' } }}
       >
         {trendingTask.payload ? (
           <div>
-            {/* We can still use the chart if payload has trends, or add logic to adapt it */}
             <TrendAreaChart trends={trendingTask.payload.trending_signals || []} height={180} />
             {trendingTask.payload.trending_signals?.length > 0 && (
-              <Row gutter={[10, 10]} style={{ marginTop: 12 }}>
+              <Row gutter={[12, 12]} style={{ marginTop: 16 }}>
                 {(trendingTask.payload.trending_signals || []).slice(0, 10).map((t: any, i: number) => {
                   const trendColor =
                     t.direction === 'rising' ? token.colorSuccess :
@@ -487,17 +467,18 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
                     <Col key={i} xs={12} sm={8} md={6}>
                       <div style={{
                         background: token.colorFillAlter,
-                        borderRadius: token.borderRadius,
-                        padding: '8px 10px',
+                        borderRadius: 8,
+                        padding: '10px 12px',
                         border: `1px solid ${token.colorBorderSecondary}`,
-                        borderTop: `3px solid ${trendColor}`,
+                        borderLeft: `3px solid ${trendColor}`,
                         height: '100%',
                       }}>
-                        <Text style={{ fontSize: 11, display: 'block', lineHeight: 1.3 }}>
-                          {DIRECTION_ICON[t.direction]} {t.label}
-                        </Text>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                          {DIRECTION_ICON[t.direction]}
+                          <Text strong style={{ fontSize: 12 }}>{t.label}</Text>
+                        </div>
                         {t.change_summary && (
-                          <Text type="secondary" style={{ fontSize: 10, display: 'block', marginTop: 4 }}>
+                          <Text type="secondary" style={{ fontSize: 11, display: 'block', lineHeight: 1.4 }}>
                             {t.change_summary}
                           </Text>
                         )}
@@ -516,7 +497,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
         variant="borderless"
         title={renderTaskHeader('Relationship Network', networkTask,
           <NodeIndexOutlined style={{ color: '#722ed1' }} />, 'relationship_network', 'ai')}
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+        style={{ border: `1px solid ${token.colorBorderSecondary}`, boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}
         styles={{ body: { padding: '16px' } }}
       >
         {networkTask.payload ? (

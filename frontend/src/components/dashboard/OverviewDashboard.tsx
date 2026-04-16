@@ -1,9 +1,9 @@
 import {
   Card, Col, Row, Typography, Tag, Space, Spin, Alert,
-  Button, Tooltip, Progress, theme, Statistic, Descriptions,
+  Button, Progress, theme, Statistic, Descriptions,
 } from 'antd'
 import {
-  DashboardOutlined, CheckCircleOutlined, SyncOutlined, ClockCircleOutlined,
+  DashboardOutlined, CheckCircleOutlined, SyncOutlined, 
   WarningOutlined, RightOutlined, BulbOutlined, RobotOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
@@ -11,10 +11,11 @@ import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useTasks } from '@/hooks/useTasks'
 import { useLLMStats } from '@/hooks/useLLMStats'
+import { PageHeader } from '../common/PageHeader'
 
 dayjs.extend(utc)
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 interface Props {
   onGoToTasks?: () => void
@@ -58,7 +59,7 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
     {
       label: 'Insight Tasks',
       value: stats?.insights ?? 0,
-      color: '#1890ff',
+      color: token.colorPrimary,
       icon: <BulbOutlined />,
     },
     {
@@ -70,7 +71,7 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
     {
       label: 'In Progress',
       value: running,
-      color: token.colorPrimary,
+      color: token.colorInfo,
       icon: <SyncOutlined spin={running > 0} />,
     },
     {
@@ -88,135 +89,128 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
   ]
 
   return (
-    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Header */}
-      <Row align="middle" justify="space-between">
-        <Space>
-          <DashboardOutlined style={{ fontSize: 18, color: token.colorPrimary }} />
-          <Title level={4} style={{ margin: 0 }}>Platform Overview</Title>
-        </Space>
-        <Space>
-          <Text type="secondary" style={{ fontSize: 12 }}>Auto-refreshes every 10 s</Text>
-          {onGoToTasks && (
-            <Button size="small" icon={<RightOutlined />} onClick={onGoToTasks}>
-              Task Monitor
-            </Button>
-          )}
-        </Space>
-      </Row>
-
-      {/* Stat cards */}
-      <Row gutter={[12, 12]}>
-        {statCards.map((s) => (
-          <Col key={s.label} xs={12} sm={8} md={24 / statCards.length}>
-            <Card
-              size="small"
-              variant="borderless"
-              style={{
-                textAlign: 'center',
-                border: `1px solid ${token.colorBorderSecondary}`,
-              }}
-            >
-              <Statistic
-                title={
-                  <Space style={{ fontSize: 12 }}>
-                    {s.icon}
-                    {s.label}
-                  </Space>
-                }
-                value={s.value}
-                styles={{ content: { fontSize: 28, color: s.color } }}
-              />
-            </Card>
-          </Col>
-        ))}
-      </Row>
-
-      {/* Completion bar */}
-      <Card
-        size="small"
-        variant="borderless"
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-      >
-        <Row align="middle" gutter={12}>
-          <Col flex="auto">
-            <Text strong style={{ fontSize: 12 }}>Overall task completion</Text>
-            <Progress
-              percent={pct}
-              size="small"
-              status={errors > 0 ? 'exception' : undefined}
-              format={() => `${complete} / ${total}`}
-              style={{ marginBottom: 0, marginTop: 4 }}
-            />
-          </Col>
-        </Row>
-      </Card>
-
-      {/* LLM Engine Details */}
-      <Card
-        size="small"
-        variant="borderless"
-        title={
+    <div style={{ padding: '0 20px 24px' }}>
+      <PageHeader 
+        title="Platform Overview" 
+        icon={<DashboardOutlined />}
+        subtitle="Real-time status of background intelligence processing and LLM performance."
+        info="This dashboard monitors the asynchronous processing of documents into structured intelligence. All metrics auto-refresh every 10 seconds."
+        extra={
           <Space>
-            <SettingOutlined style={{ color: token.colorPrimary }} />
-            <span style={{ fontSize: 14 }}>LLM Engine Details</span>
+            {onGoToTasks && (
+              <Button type="primary" icon={<RightOutlined />} onClick={onGoToTasks} size="small">
+                Task Monitor
+              </Button>
+            )}
           </Space>
         }
-        style={{ border: `1px solid ${token.colorBorderSecondary}` }}
-      >
-        {isLlmLoading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}><Spin size="small" /></div>
-        ) : llmStats?.error ? (
-          <Alert type="warning" message="Could not fetch detailed model info" showIcon />
-        ) : (
-          <Descriptions column={{ xs: 1, sm: 2, md: 3, lg: 4 }} size="small" bordered>
-            <Descriptions.Item label="Model">
-              <Text strong>{llmStats?.model_path?.split('/').pop() ?? llmStats?.model ?? 'Unknown'}</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="Architecture">
-              {llmStats?.model_type ?? llmStats?.architectures?.[0] ?? '—'}
-            </Descriptions.Item>
-            <Descriptions.Item label="Quantization">
-              <Tag color="processing">{llmStats?.quantization ?? '—'}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Context Window">
-              {(llmStats?.max_model_len ?? llmStats?.context_length ?? 0).toLocaleString()} tokens
-            </Descriptions.Item>
-            <Descriptions.Item label="dtype">
-              {llmStats?.dtype ?? '—'}
-            </Descriptions.Item>
-            <Descriptions.Item label="KV Cache dtype">
-              {llmStats?.kv_cache_dtype ?? '—'}
-            </Descriptions.Item>
-            <Descriptions.Item label="VRAM (static)">
-              {llmStats?.mem_fraction_static != null ? `${(llmStats.mem_fraction_static * 100).toFixed(0)}%` : '—'}
-            </Descriptions.Item>
-            <Descriptions.Item label="Max Concurrent">
-              {llmStats?.max_running_requests ?? '—'}
-            </Descriptions.Item>
-          </Descriptions>
-        )}
-      </Card>
+      />
 
-      {/* Go-to link */}
-      {onGoToTasks && (
+      <Space direction="vertical" size={20} style={{ width: '100%' }}>
+        {/* Stat cards */}
+        <Row gutter={[16, 16]}>
+          {statCards.map((s) => (
+            <Col key={s.label} xs={12} sm={8} md={24 / statCards.length}>
+              <Card
+                size="small"
+                variant="borderless"
+                style={{
+                  textAlign: 'center',
+                  background: token.colorBgContainer,
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Statistic
+                  title={
+                    <Space style={{ fontSize: 12 }}>
+                      {s.icon}
+                      {s.label}
+                    </Space>
+                  }
+                  value={s.value}
+                  valueStyle={{ fontSize: 24, fontWeight: 600, color: s.color }}
+                />
+              </Card>
+            </Col>
+          ))}
+        </Row>
+
+        {/* Completion bar */}
         <Card
           size="small"
           variant="borderless"
-          style={{
+          style={{ 
+            background: token.colorBgContainer,
             border: `1px solid ${token.colorBorderSecondary}`,
-            cursor: 'pointer',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
           }}
-          onClick={onGoToTasks}
         >
-          <Row align="middle" justify="space-between">
-            <Text>View all tasks with filters, sorting and detail view</Text>
-            <Button type="link" icon={<RightOutlined />}>
-              Open Task Monitor
-            </Button>
-          </Row>
+          <div style={{ padding: '4px 8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text strong style={{ fontSize: 13 }}>Overall Task Completion</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{complete} / {total} tasks</Text>
+            </div>
+            <Progress
+              percent={pct}
+              size="small"
+              status={errors > 0 ? 'exception' : 'active'}
+              strokeColor={token.colorSuccess}
+              style={{ marginBottom: 0 }}
+            />
+          </div>
         </Card>
-      )}
+
+        {/* LLM Engine Details */}
+        <Card
+          size="small"
+          variant="borderless"
+          title={
+            <Space>
+              <SettingOutlined style={{ color: token.colorPrimary }} />
+              <span style={{ fontSize: 14, fontWeight: 600 }}>LLM Engine Configuration</span>
+            </Space>
+          }
+          style={{ 
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
+          }}
+        >
+          {isLlmLoading ? (
+            <div style={{ textAlign: 'center', padding: 20 }}><Spin size="small" /></div>
+          ) : llmStats?.error ? (
+            <Alert type="warning" message="Could not fetch detailed model info" showIcon />
+          ) : (
+            <Descriptions column={{ xs: 1, sm: 2, md: 3, lg: 4 }} size="small" bordered={false}>
+              <Descriptions.Item label={<Text type="secondary">Model</Text>}>
+                <Text strong>{llmStats?.model_path?.split('/').pop() ?? llmStats?.model ?? 'Unknown'}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label={<Text type="secondary">Architecture</Text>}>
+                {llmStats?.model_type ?? llmStats?.architectures?.[0] ?? '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label={<Text type="secondary">Quantization</Text>}>
+                <Tag color="processing" style={{ borderRadius: 4, fontSize: 10 }}>{llmStats?.quantization ?? '—'}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label={<Text type="secondary">Context Window</Text>}>
+                {(llmStats?.max_model_len ?? llmStats?.context_length ?? 0).toLocaleString()} tokens
+              </Descriptions.Item>
+              <Descriptions.Item label={<Text type="secondary">Inference Type</Text>}>
+                {llmStats?.dtype ?? '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label={<Text type="secondary">KV Cache</Text>}>
+                {llmStats?.kv_cache_dtype ?? '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label={<Text type="secondary">VRAM Utilization</Text>}>
+                {llmStats?.mem_fraction_static != null ? `${(llmStats.mem_fraction_static * 100).toFixed(0)}%` : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label={<Text type="secondary">Concurrent Slots</Text>}>
+                {llmStats?.max_running_requests ?? '—'}
+              </Descriptions.Item>
+            </Descriptions>
+          )}
+        </Card>
+      </Space>
     </div>
   )
 }

@@ -1,10 +1,12 @@
 import { useMemo } from 'react'
-import { Typography, Tag, Space, theme, Button, Tooltip, Progress, Collapse, Avatar } from 'antd'
-import { LinkOutlined, CalendarOutlined, TagOutlined, RobotOutlined, UserOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import { Typography, Tag, Space, theme, Button, Tooltip, Collapse, Avatar } from 'antd'
+import { LinkOutlined, CalendarOutlined, RobotOutlined, UserOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useNavigate } from 'react-router-dom'
 import type { Message, Source } from '@/types'
+import { ClassificationTag, SentimentTag } from '../common/IntelligenceTags'
+import { RelevanceBar } from '../common/RelevanceBar'
 
 const { Text } = Typography
 
@@ -145,16 +147,9 @@ function mdComponents(token: any) {
   }
 }
 
-function scoreColor(score: number, token: any) {
-  if (score >= 0.75) return token.colorSuccess
-  if (score >= 0.45) return token.colorWarning
-  return token.colorError
-}
-
 function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank: number; navigate: (url: string) => void }) {
   const { token } = theme.useToken()
   const score  = src.score ?? 0
-  const color  = scoreColor(score, token)
   const canNav = !!(src.datasource && src.id)
   const rankLabel = src.index || `#${fallbackRank}`
 
@@ -165,7 +160,7 @@ function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank
   return (
     <div
       style={{
-        borderLeft:   `3px solid ${color}`,
+        borderLeft:   `3px solid ${token.colorPrimary}`,
         background:   token.colorBgElevated,
         borderRadius: `0 ${token.borderRadius}px ${token.borderRadius}px 0`,
         padding:      '10px 14px',
@@ -189,14 +184,7 @@ function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank
           )}
         </Space>
         <Space size={4}>
-          <Tooltip title={`Relevance: ${(score * 100).toFixed(0)}%`}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-               <div style={{ width: 40, height: 4, background: token.colorFillTertiary, borderRadius: 2 }}>
-                  <div style={{ width: `${score * 100}%`, height: '100%', background: color, borderRadius: 2 }} />
-               </div>
-               <Text style={{ fontSize: 10, color: token.colorTextDescription }}>{(score * 100).toFixed(0)}%</Text>
-            </div>
-          </Tooltip>
+          <RelevanceBar score={score} />
           {navUrl && (
             <Button
               size="small"
@@ -216,23 +204,8 @@ function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank
               {src.date}
             </Tag>
           )}
-          {src.classification && (
-            <Tag icon={<TagOutlined />} style={{ fontSize: 10, margin: 0 }}>
-              {src.classification}
-            </Tag>
-          )}
-          {src.sentiment && (
-            <Tag
-              color={
-                src.sentiment === 'positive' || src.sentiment === 'supportive' ? 'success'
-                  : src.sentiment === 'negative' || src.sentiment === 'hostile' ? 'error'
-                  : 'default'
-              }
-              style={{ fontSize: 10, margin: 0 }}
-            >
-              {src.sentiment}
-            </Tag>
-          )}
+          <ClassificationTag value={src.classification} />
+          <SentimentTag value={src.sentiment} />
         </Space>
       )}
 

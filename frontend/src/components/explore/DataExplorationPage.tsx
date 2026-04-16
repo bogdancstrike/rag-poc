@@ -3,7 +3,7 @@ import {
   Button, Space, Typography, Tag, Tooltip, message, theme,
 } from 'antd'
 import {
-  FilterOutlined, BookOutlined, ClearOutlined,
+  FilterOutlined, BookOutlined, ClearOutlined, TableOutlined,
 } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { DataTable } from './DataTable'
@@ -11,6 +11,7 @@ import { AdvancedSearchPanel, type AdvancedSearchState } from './AdvancedSearchP
 import { SavedSearchesDrawer } from './SavedSearchesDrawer'
 import { useIndices } from '@/hooks/useExplore'
 import { useCreateSearch } from '@/hooks/useSavedSearches'
+import { PageHeader } from '../common/PageHeader'
 import type { SavedSearch, SavedSearchFilters } from '@/types'
 import type { DocumentFilters } from '@/api/explore'
 
@@ -162,75 +163,78 @@ export function DataExplorationPage() {
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Action bar */}
-      <div
-        style={{
-          padding: '10px 16px',
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          background: token.colorBgContainer,
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '0 20px 24px' }}>
+      <PageHeader 
+        title="Data Exploration" 
+        icon={<TableOutlined />}
+        subtitle="Explore and filter the intelligence corpus across all indices."
+        info="High-performance document retrieval with advanced filtering. Supports complex keyword queries, sentiment filtering, and date ranges."
+        extra={
+          <Space>
+            <Button
+              icon={<BookOutlined />}
+              size="small"
+              onClick={() => setShowSaved(true)}
+            >
+              Saved Searches
+            </Button>
+            <Button
+              icon={<FilterOutlined />}
+              size="small"
+              type={activeTags.length > 0 ? 'primary' : 'default'}
+              onClick={() => setShowAdvanced(true)}
+            >
+              Advanced Search
+              {activeTags.length > 0 && ` (${activeTags.length})`}
+            </Button>
+          </Space>
+        }
+      />
+
+      {/* Active filter row */}
+      {activeTags.length > 0 && (
+        <div style={{ 
+          marginBottom: 16, 
+          padding: '8px 12px', 
+          background: token.colorFillAlter, 
+          borderRadius: 8,
           display: 'flex',
           alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 8,
-          flexShrink: 0,
-        }}
-      >
-        <Text strong style={{ fontSize: 14 }}>Data Exploration</Text>
-        <Text type="secondary" style={{ fontSize: 12 }}>— all indices</Text>
+          justifyContent: 'space-between'
+        }}>
+          <Space wrap size={4}>
+            <Text type="secondary" style={{ fontSize: 11, marginRight: 4 }}>ACTIVE FILTERS:</Text>
+            {activeTags.map(({ label, onRemove }, i) => (
+              <Tag
+                key={i}
+                closable
+                onClose={onRemove}
+                style={{ fontSize: 11, borderRadius: 4 }}
+              >
+                {label}
+              </Tag>
+            ))}
+          </Space>
+          <Tooltip title="Clear all filters">
+            <Button
+              size="small"
+              type="text"
+              icon={<ClearOutlined />}
+              onClick={handleClearAll}
+              style={{ color: token.colorTextQuaternary }}
+            />
+          </Tooltip>
+        </div>
+      )}
 
-        <div style={{ flex: 1 }} />
-
-        {/* Active filter tags */}
-        <Space wrap size={4}>
-          {activeTags.map(({ label, onRemove }, i) => (
-            <Tag
-              key={i}
-              closable
-              onClose={onRemove}
-              style={{ fontSize: 11 }}
-            >
-              {label}
-            </Tag>
-          ))}
-          {activeTags.length > 0 && (
-            <Tooltip title="Clear all filters">
-              <Button
-                size="small"
-                type="text"
-                icon={<ClearOutlined />}
-                onClick={handleClearAll}
-              />
-            </Tooltip>
-          )}
-        </Space>
-
-        <Button
-          icon={<BookOutlined />}
-          size="small"
-          onClick={() => setShowSaved(true)}
-        >
-          Saved Searches
-        </Button>
-        <Button
-          icon={<FilterOutlined />}
-          size="small"
-          type={activeTags.length > 0 ? 'primary' : 'default'}
-          onClick={() => setShowAdvanced(true)}
-        >
-          Advanced Search
-          {activeTags.length > 0 && ` (${activeTags.length})`}
-        </Button>
-      </div>
-
-      <div style={{ flex: 1, padding: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <DataTable
           datasource=""
           controlledQuery={appliedState.query}
           controlledFilters={dtFilters}
           showSourceIndex
           enableUrlSync
-          yOffset={280}
+          yOffset={activeTags.length > 0 ? 340 : 280}
         />
       </div>
 
