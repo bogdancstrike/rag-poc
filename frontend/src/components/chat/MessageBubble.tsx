@@ -8,6 +8,7 @@ import type { Message } from '@/types'
 const { Text } = Typography
 
 interface Source {
+  index?: string
   id: string
   score: number
   text?: string
@@ -22,26 +23,36 @@ interface Props {
   message: Message & { streaming?: boolean }
 }
 
-/** Replace [doc:ID] or [doc:ID "Title"] citations with styled inline markers. */
+/** Replace [#1] or [doc:ID] citations with styled inline markers. */
 function CitedContent({ content, sources }: { content: string; sources: Source[] }) {
   const { token } = theme.useToken()
 
-  // Build a lookup: id → rank (1-based)
+  // Build a lookup: id → rank (for old [doc:ID] citations)
   const rankMap = useMemo(
     () => Object.fromEntries(sources.map((s, i) => [s.id, i + 1])),
     [sources],
   )
 
-  // Split on [doc:ID] or [doc:ID "Title"] patterns
+  // Split on [#N] or [doc:ID] patterns
   const parts = useMemo(() => {
-    const regex = /\[doc:([^\]"]+?)(?:\s+"[^"]*")?\]/g
-    const result: Array<{ type: 'text' | 'cite'; value: string; docId?: string; rank?: number }> = []
+    // Matches [#1], [#2] OR [doc:uuid]
+    const regex = /\[(?:#(\d+)|doc:([^\]"]+?)(?:\s+"[^"]*")?)\]/g
+    const result: Array<{ type: 'text' | 'cite'; value: string; rank?: string | number }> = []
     let last = 0
     let m: RegExpExecArray | null
+    
     while ((m = regex.exec(content)) !== null) {
       if (m.index > last) result.push({ type: 'text', value: content.slice(last, m.index) })
-      const docId = m[1].trim()
-      result.push({ type: 'cite', value: m[0], docId, rank: rankMap[docId] })
+      
+      const numericRank = m[1]
+      const docId = m[2]
+      
+      if (numericRank) {
+        result.push({ type: 'cite', value: m[0], rank: numericRank })
+      } else if (docId) {
+        result.push({ type: 'cite', value: m[0], rank: rankMap[docId.trim()] || docId })
+      }
+      
       last = m.index + m[0].length
     }
     if (last < content.length) result.push({ type: 'text', value: content.slice(last) })
@@ -63,7 +74,7 @@ function CitedContent({ content, sources }: { content: string; sources: Source[]
     <span>
       {parts.map((p, i) =>
         p.type === 'cite' ? (
-          <Tooltip key={i} title={`Source ${p.rank ?? p.docId}`}>
+          <Tooltip key={i} title={`Source #${p.rank}`}>
             <Tag
               color="blue"
               style={{
@@ -76,7 +87,7 @@ function CitedContent({ content, sources }: { content: string; sources: Source[]
                 borderRadius: 3,
               }}
             >
-              [{p.rank ?? p.docId}]
+              [#{p.rank}]
             </Tag>
           </Tooltip>
         ) : (
@@ -129,11 +140,12 @@ function scoreColor(score: number, token: any) {
   return token.colorError
 }
 
-function SourceCard({ src, rank, navigate }: { src: Source; rank: number; navigate: (url: string) => void }) {
+function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank: number; navigate: (url: string) => void }) {
   const { token } = theme.useToken()
   const score  = src.score ?? 0
   const color  = scoreColor(score, token)
   const canNav = !!(src.datasource && src.id)
+  const rankLabel = src.index || `#${fallbackRank}`
 
   const navUrl = canNav
     ? `/explore?doc=${encodeURIComponent(src.id)}&idx=${encodeURIComponent(src.datasource!)}`
@@ -153,7 +165,7 @@ function SourceCard({ src, rank, navigate }: { src: Source; rank: number; naviga
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
         <Space size={4} wrap style={{ flex: 1 }}>
           <Tag color="blue" style={{ fontSize: 10, margin: 0, flexShrink: 0 }}>
-            #{rank}
+            {rankLabel}
           </Tag>
           {src.title ? (
             <Text strong style={{ fontSize: 12 }}>{src.title}</Text>
@@ -297,7 +309,7 @@ export function MessageBubble({ message }: Props) {
                 {sources.length} source{sources.length > 1 ? 's' : ''} used
               </Text>
               {sources.map((src, i) => (
-                <SourceCard key={src.id} src={src} rank={i + 1} navigate={navigate} />
+                <SourceCard key={src.id} src={src} fallbackRank={i + 1} navigate={navigate} />
               ))}
             </div>
           ) : (
@@ -315,7 +327,7 @@ export function MessageBubble({ message }: Props) {
                 children: (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {sources.map((src, i) => (
-                      <SourceCard key={src.id} src={src} rank={i + 1} navigate={navigate} />
+                      <SourceCard key={src.id} src={src} fallbackRank={i + 1} navigate={navigate} />
                     ))}
                   </div>
                 ),

@@ -16,10 +16,10 @@ Your role is to help analysts understand and explore data from the QSINT intelli
 STRICT RULES:
 1. Answer ONLY using information from the provided <doc> context blocks. Never use outside knowledge or fabricate facts.
 2. If the documents do not contain enough information to answer, say exactly: "The provided documents do not contain enough information to answer this question."
-3. Cite every claim inline using the document id attribute: [doc:ID]. If a doc has a title attribute, prefer [doc:ID "Title"]. Cite ALL documents that support each point.
+3. Cite every claim inline using the document index: [#1], [#2], etc. Cite ALL documents that support each point.
 4. Do NOT summarise every document — synthesise a direct answer to the question, citing only the relevant parts.
 5. Use markdown structure (bullet points, **bold** key terms, headings) when it improves clarity.
-6. Never invent document IDs or cite documents not in the provided context.
+6. Never invent document indices or cite documents not in the provided context.
 """
 
 INSIGHTS_TRENDING_SIGNALS_SCHEMA = """{
@@ -566,9 +566,8 @@ class PromptBuilder:
     def _format_chunks(chunks: list[dict]) -> str:
         """Render retrieved chunks as XML blocks for the LLM prompt.
 
-        Each <doc> tag carries all available metadata as attributes so the model
-        can write informative citations (title, date, classification, sentiment).
-        Scores are already normalised to [0,1] by _filter_chunks; 1.0 = best match.
+        Each <doc> tag carries a numeric index [#1, #2, etc.] that the model
+        MUST use for citations, along with metadata as attributes.
         """
         if not chunks:
             return "<context>No relevant documents found.</context>"
@@ -586,7 +585,8 @@ class PromptBuilder:
             classification = meta.get("classification") or ""
             sentiment      = meta.get("sentiment") or ""
 
-            attrs = [f'id="{doc_id}"', f'rank="{i}"', f'relevance="{score:.2f}"']
+            # The 'index' attribute is the primary key for LLM citations [#1], [#2]
+            attrs = [f'index="#{i}"', f'id="{doc_id}"', f'relevance="{score:.2f}"']
             if title:          attrs.append(f'title="{title}"')
             if date:           attrs.append(f'date="{str(date)[:10]}"')
             if classification: attrs.append(f'class="{classification}"')

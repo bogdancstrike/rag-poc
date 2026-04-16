@@ -19,11 +19,15 @@ export interface Message {
 }
 
 export interface Source {
+  index?:      string   // #1, #2, etc.
   id:          string
   score:       number
   text:        string
   title?:      string   // doc title or source field
+  date?:       string
   datasource?: string   // index name — used for "Go To Document" link
+  classification?: string
+  sentiment?:      string
 }
 
 // ── Insights types ────────────────────────────────────────────────────────────

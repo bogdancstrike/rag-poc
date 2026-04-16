@@ -200,7 +200,7 @@ def _format_sources(chunks: list[dict], datasource: str) -> list[dict]:
     so 1.0 = best match for this query, 0.35+ = kept by the relevance filter.
     """
     sources = []
-    for c in chunks:
+    for i, c in enumerate(chunks, 1):
         meta  = c.get("metadata") or {}
         title = (
             c.get("title")
@@ -217,6 +217,7 @@ def _format_sources(chunks: list[dict], datasource: str) -> list[dict]:
             or ""
         )
         sources.append({
+            "index":        f"#{i}",
             "id":           c.get("id", ""),
             "score":        round(c.get("score", 0), 4),
             "text":         (c.get("text") or "")[:400],
