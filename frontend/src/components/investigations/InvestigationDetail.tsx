@@ -17,6 +17,9 @@ import type { Investigation } from '@/types'
 
 const { Text, Title } = Typography
 
+type TabKey = 'data' | 'insights' | 'chat'
+const VALID_TABS: TabKey[] = ['data', 'insights', 'chat']
+
 interface Props {
   id: string
 }

@@ -80,7 +80,7 @@ export function InsightsPanel({ datasource = 'default', onAskAbout, onSendToRag 
   const allTaskKeys   = [...aiTaskKeys, ...statsTaskKeys]
 
   const isProcessing = meta?.is_processing ||
-    allTaskKeys.some((k) => tasks[k]?.status === 'processing' || tasks[k]?.status === 'pending')
+    allTaskKeys.some((k) => tasks[k] && (tasks[k].status === 'processing' || tasks[k].status === 'pending'))
 
   const generatedAt = topicsTask.generated_at
     ? dayjs.utc(topicsTask.generated_at).local().fromNow()
