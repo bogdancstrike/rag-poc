@@ -480,17 +480,20 @@ class ESClient:
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
     def _check_vector_field(self, index_name: str) -> bool:
-        """Detect whether the index has the 'embedding' dense_vector field (cached)."""
+        """Detect whether the index (or at least one in the pattern) has the 'embedding' field."""
         if index_name in self._has_vector_cache:
             return self._has_vector_cache[index_name]
         try:
             mapping = self._client.indices.get_mapping(index=index_name)
-            props   = (
-                mapping.get(index_name, {})
-                .get("mappings", {})
-                .get("properties", {})
-            )
-            has_vector = props.get("embedding", {}).get("type") == "dense_vector"
+            
+            # Check if any matched index has the field
+            has_vector = False
+            for m in mapping.values():
+                props = m.get("mappings", {}).get("properties", {})
+                if props.get("embedding", {}).get("type") == "dense_vector":
+                    has_vector = True
+                    break
+                    
             self._has_vector_cache[index_name] = has_vector
             return has_vector
         except Exception:
