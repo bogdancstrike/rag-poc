@@ -18,7 +18,7 @@ from src.worker.task_handlers import dispatch_task, mark_task_error
 # has a chance to raise its own timeout first.
 _LLM_TASK_TIMEOUT = Config.LLM_TIMEOUT + 30
 
-_LLM_TYPES  = {"insight_ai", "enrich_doc", "enrich_field"}
+_LLM_TYPES  = {"insight_ai", "enrich_doc", "enrich_field", "embed_docs"}
 _FAST_TYPES = {"insight_coordinator", "insight_stats"}
 
 _consumer_thread: threading.Thread | None = None

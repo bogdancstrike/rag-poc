@@ -171,22 +171,28 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
         ) : (
           <Descriptions column={{ xs: 1, sm: 2, md: 3, lg: 4 }} size="small" bordered>
             <Descriptions.Item label="Model">
-              <Text strong>{llmStats?.details?.parent_model || 'Unknown'}</Text>
+              <Text strong>{llmStats?.model_path?.split('/').pop() ?? llmStats?.model ?? 'Unknown'}</Text>
             </Descriptions.Item>
-            <Descriptions.Item label="Parameters">
-              {llmStats?.details?.parameter_size}
+            <Descriptions.Item label="Architecture">
+              {llmStats?.model_type ?? llmStats?.architectures?.[0] ?? '—'}
             </Descriptions.Item>
             <Descriptions.Item label="Quantization">
-              <Tag color="processing">{llmStats?.details?.quantization_level}</Tag>
+              <Tag color="processing">{llmStats?.quantization ?? '—'}</Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Context Window">
-              {llmStats?.modelfile?.match(/num_ctx\s+(\d+)/)?.[1] || '4096'} tokens
+              {(llmStats?.max_model_len ?? llmStats?.context_length ?? 0).toLocaleString()} tokens
             </Descriptions.Item>
-            <Descriptions.Item label="Family">
-              {llmStats?.details?.family}
+            <Descriptions.Item label="dtype">
+              {llmStats?.dtype ?? '—'}
             </Descriptions.Item>
-            <Descriptions.Item label="Format">
-              {llmStats?.details?.format}
+            <Descriptions.Item label="KV Cache dtype">
+              {llmStats?.kv_cache_dtype ?? '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="VRAM (static)">
+              {llmStats?.mem_fraction_static != null ? `${(llmStats.mem_fraction_static * 100).toFixed(0)}%` : '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Max Concurrent">
+              {llmStats?.max_running_requests ?? '—'}
             </Descriptions.Item>
           </Descriptions>
         )}

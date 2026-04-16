@@ -306,6 +306,17 @@ if grep -q "^LLM_BASE_URL=" .env 2>/dev/null; then
   success "LLM_BASE_URL → ${LLM_URL}"
 fi
 
+# ── Download Embedding Model ──────────────────────────────────────────────────
+if [[ "$NO_BACKEND" == "false" ]]; then
+  section "Embedding Model"
+  EMBED_MODEL_NAME=$(.venv/bin/python -c "from src.config import Config; print(Config.EMBED_MODEL)")
+  EMBED_CACHE=$(.venv/bin/python -c "from src.config import Config; print(Config.EMBED_CACHE_DIR)")
+  
+  info "Checking/Downloading ${EMBED_MODEL_NAME}..."
+  .venv/bin/python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='${EMBED_MODEL_NAME}', cache_dir='${EMBED_CACHE}')"
+  success "Embedding model ready"
+fi
+
 # ── Start Python backend ───────────────────────────────────────────────────────
 if [[ "$NO_BACKEND" == "false" ]]; then
   start_backend

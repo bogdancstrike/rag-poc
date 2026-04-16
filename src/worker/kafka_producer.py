@@ -57,7 +57,7 @@ def publish_task(task: dict) -> bool:
     task.setdefault("created_at", datetime.now(timezone.utc).isoformat())
 
     # Route fast vs LLM tasks to separate topics
-    llm_types = {"insight_ai", "enrich_doc", "enrich_field"}
+    llm_types = {"insight_ai", "enrich_doc", "enrich_field", "embed_docs"}
     topic = (
         Config.KAFKA_TOPIC_LLM_TASKS
         if task.get("task_type") in llm_types

@@ -7,6 +7,7 @@ volumes:
   sglang-models: {}
   redis-data: {}
   kafka-data: {}
+  embed-cache: {}   # fastembed model cache (bge-large-en-v1.5, ~1 GB)
 
 services:
 
@@ -40,7 +41,7 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx1g
+      - ES_JAVA_OPTS=-Xms2g -Xmx4g
       - cluster.name=qsint-rag
       - bootstrap.memory_lock=true
     ulimits:

@@ -33,18 +33,19 @@ export interface TaskOverview {
 }
 
 export interface LLMStats {
-  modelfile: string
-  parameters: string
-  template: string
-  details: {
-    parent_model: string
-    format: string
-    family: string
-    families: string[]
-    parameter_size: string
-    quantization_level: string
-  }
-  model_info?: Record<string, any>
+  model: string
+  model_path?: string
+  model_type?: string
+  architectures?: string[]
+  context_length?: number
+  max_model_len?: number
+  dtype?: string
+  quantization?: string
+  kv_cache_dtype?: string
+  mem_fraction_static?: number
+  max_running_requests?: number
+  tp_size?: number
+  is_generation?: boolean
   error?: string
 }
 

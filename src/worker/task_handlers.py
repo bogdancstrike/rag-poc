@@ -30,6 +30,8 @@ def dispatch_task(task: dict) -> None:
             handle_enrich_field(task)
         elif ttype == "create_investigation":
             handle_create_investigation(task)
+        elif ttype == "embed_docs":
+            handle_embed_docs(task)
         else:
             logger.warning(f"[worker] Unknown task_type: {ttype!r}")
             return
@@ -91,10 +93,12 @@ def handle_insight_ai(task: dict) -> None:
     
     engine = get_insights_engine()
     retriever = get_retriever()
-    
-    # We must fetch the same sample used for hashing
-    sample = retriever.get_sample(Config.INSIGHTS_MAX_DOCS, index_name=datasource)
-    
+
+    # Use semantic sampling biased toward the insight topic when vectors are available.
+    sample = retriever.get_semantic_sample(
+        Config.INSIGHTS_MAX_DOCS, index_name=datasource, insight_type=insight_type
+    )
+
     # Logic is internal to InsightsEngine
     engine._run_ai_task(datasource, insight_type, sample, sample_hash)
 
@@ -187,12 +191,108 @@ def handle_create_investigation(task: dict) -> None:
         )
         logger.info(f"[investigation] Ready: {inv_id} index={index_name} docs={total_copied}", "magenta")
 
+        # 4. Kick off background embedding — upgrades BM25 → hybrid after completion
+        if total_copied > 0:
+            from src.worker.kafka_producer import publish_task
+            publish_task({
+                "task_type":        "embed_docs",
+                "investigation_id": inv_id,
+                "datasource":       index_name,
+            })
+            logger.info(f"[investigation] Queued embed_docs for {index_name}")
+
     except Exception as e:
         logger.error(f"[investigation] Failed to create {inv_id}: {e}", exc_info=True)
         update_investigation_status(
             investigation_id=inv_id,
             status="error",
             error_msg=str(e),
+        )
+        raise
+
+
+# ── Embedding task ────────────────────────────────────────────────────────────
+
+def handle_embed_docs(task: dict) -> None:
+    """Embed all documents in an investigation index and store vectors in ES.
+
+    Scrolls the investigation index in batches, embeds each batch via
+    fastembed (CPU-only), bulk-updates the 'embedding' field, then
+    invalidates the ESClient vector cache and marks the investigation
+    status as 'ready_with_vectors'.
+    """
+    inv_id     = task["investigation_id"]
+    index_name = task["datasource"]
+
+    from src.datasource.es_client import ESClient
+    from src.datasource.embedding_client import get_embedding_client
+    from src.session.session_service import update_investigation_status
+
+    es = ESClient()
+    embed = get_embedding_client()
+
+    total_embedded = 0
+    batch_size = Config.EMBED_BATCH_SIZE
+
+    logger.info(f"[embed_docs] Starting embedding for index='{index_name}'")
+
+    try:
+        for raw_hits in es.scroll_all(
+            index_name=index_name,
+            batch_size=batch_size,
+            source_fields=["text", "content", "body", "title", "description"],
+        ):
+            # Extract text for each hit using the same fallback chain
+            texts = []
+            ids   = []
+            for hit in raw_hits:
+                src = hit.get("_source", {})
+                text = (
+                    src.get("text") or src.get("content") or src.get("body")
+                    or src.get("description") or src.get("title") or ""
+                )
+                texts.append(text[:2000])
+                ids.append(hit["_id"])
+
+            if not texts:
+                continue
+
+            vecs = embed.embed(texts)
+            updates = [{"_id": doc_id, "embedding": vec} for doc_id, vec in zip(ids, vecs)]
+            done = es.bulk_update_embeddings(index_name, updates)
+            total_embedded += done
+            logger.info(f"[embed_docs] Embedded {total_embedded} docs in '{index_name}'")
+
+        # Refresh index so newly written vectors are queryable
+        try:
+            es._client.indices.refresh(index=index_name)
+        except Exception as e:
+            logger.warning(f"[embed_docs] refresh failed: {e}")
+
+        # Invalidate the ESClient cache so hybrid search activates on next query
+        es.invalidate_vector_cache(index_name)
+
+        # Also invalidate the module-level ESClient singleton used by Retriever
+        from src.rag.retriever import get_retriever
+        retriever = get_retriever()
+        if retriever._es_client:
+            retriever._es_client.invalidate_vector_cache(index_name)
+
+        update_investigation_status(
+            investigation_id=inv_id,
+            status="ready_with_vectors",
+        )
+        logger.info(
+            f"[embed_docs] Done: {total_embedded} docs embedded for '{index_name}' → ready_with_vectors",
+            "magenta",
+        )
+
+    except Exception as e:
+        logger.error(f"[embed_docs] Failed for '{index_name}': {e}", exc_info=True)
+        update_investigation_status(
+            investigation_id=inv_id,
+            status="error",
+            error_msg=f"embed_docs failed: {e}",
         )
         raise
 

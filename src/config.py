@@ -77,6 +77,12 @@ class Config:
     # Hard cap for per-document enrichment (full-text, single doc at a time).
     INSIGHTS_MAX_DOCS_FULL_TEXT = int(os.getenv("INSIGHTS_MAX_DOCS_FULL_TEXT", "40"))
 
+    # ── Embeddings (fastembed / bge-m3, CPU-only) ─────────────────────────────────
+    EMBED_MODEL      = os.getenv("EMBED_MODEL",      "BAAI/bge-large-en-v1.5")
+    EMBED_CACHE_DIR  = os.getenv("EMBED_CACHE_DIR",  "./data/embed_cache")
+    EMBED_DIMS       = int(os.getenv("EMBED_DIMS",   "1024"))
+    EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
+
     # ── Kafka / Worker (required by QF framework at import time — unused for RAG) ──
     WORKER_NAME              = os.getenv("WORKER_NAME", "qsint-rag")
     KAFKA_BOOTSTRAP_SERVERS  = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")

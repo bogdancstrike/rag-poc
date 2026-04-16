@@ -78,6 +78,40 @@ class Retriever:
                 span.set_attribute("sample.error", str(e))
                 return []
 
+    def get_semantic_sample(
+        self,
+        n: int = None,
+        index_name: str = None,
+        insight_type: str = None,
+    ) -> list[dict]:
+        """Return docs biased toward the topic anchor for insight_type.
+
+        Delegates to ESClient.get_semantic_sample() when ES is active.
+        Falls back to random get_sample() for the file backend or on error.
+        """
+        count = n or Config.INSIGHTS_MAX_DOCS
+        with tracer.start_as_current_span("rag.semantic_sample") as span:
+            span.set_attribute("sample.count_requested", count)
+            span.set_attribute("sample.insight_type", insight_type or "")
+            span.set_attribute("sample.backend", "file" if self._file_loader else "elasticsearch")
+            if index_name:
+                span.set_attribute("sample.index_name", index_name)
+            try:
+                if self._file_loader:
+                    results = self._file_loader.get_sample(count)
+                elif self._es_client:
+                    results = self._es_client.get_semantic_sample(
+                        count, index_name=index_name, insight_type=insight_type
+                    )
+                else:
+                    results = []
+                span.set_attribute("sample.count_returned", len(results))
+                return results
+            except Exception as e:
+                logger.error(f"[retriever] get_semantic_sample error: {e}", exc_info=True)
+                span.set_attribute("sample.error", str(e))
+                return []
+
     def get_status(self, index_name: str = None) -> dict:
         """Return connectivity / stats info about the active datasource."""
         try:

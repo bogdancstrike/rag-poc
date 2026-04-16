@@ -253,19 +253,41 @@ class LLMClient:
     # ── Model Information ──────────────────────────────────────────────────────
 
     def get_model_info(self) -> dict:
-        """Fetch model metadata via the standard GET /v1/models/{id} endpoint.
-
-        Works with SGLang, vLLM, and Ollama.
-        """
+        """Fetch model metadata from SGLang's /model_info and /get_server_info endpoints."""
         import requests
+        base = Config.LLM_BASE_URL.rstrip("/v1").rstrip("/")
+        result: dict = {"model": self._model}
         try:
-            url = f"{Config.LLM_BASE_URL}/models/{self._model}"
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            return resp.json()
+            r = requests.get(f"{base}/model_info", timeout=10)
+            if r.ok:
+                result.update(r.json())
         except Exception as e:
-            logger.error(f"[llm] Failed to fetch model info: {e}")
-            return {"error": str(e), "model": self._model}
+            logger.warning(f"[llm] /model_info unavailable: {e}")
+
+        try:
+            r = requests.get(f"{base}/get_server_info", timeout=10)
+            if r.ok:
+                info = r.json()
+                # Pick the fields useful for the UI
+                for key in ("context_length", "max_running_requests", "mem_fraction_static",
+                            "dtype", "quantization", "kv_cache_dtype", "tp_size"):
+                    if key in info:
+                        result[key] = info[key]
+        except Exception as e:
+            logger.warning(f"[llm] /get_server_info unavailable: {e}")
+
+        try:
+            r = requests.get(f"{base}/v1/models", timeout=10)
+            if r.ok:
+                models = r.json().get("data", [])
+                if models:
+                    result["max_model_len"] = models[0].get("max_model_len", result.get("context_length"))
+        except Exception:
+            pass
+
+        if len(result) <= 1:
+            return {"error": "Could not reach inference server", "model": self._model}
+        return result
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

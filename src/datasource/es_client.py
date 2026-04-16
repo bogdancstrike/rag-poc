@@ -1,8 +1,7 @@
 """Elasticsearch 8 datasource client.
 
-Provides keyword (BM25) search and random sampling for the RAG pipeline.
-If the index contains a 'vector' field the client upgrades automatically
-to a hybrid BM25 + KNN search (requires ES 8.x dense_vector support).
+Provides keyword (BM25) search, hybrid BM25+KNN search (when embedding field
+is present), random sampling, and semantic sampling for the RAG pipeline.
 """
 import random
 from typing import Optional
@@ -15,6 +14,15 @@ from src.config import Config
 
 class ESClient:
     """Thin wrapper around the official elasticsearch-py 8.x client."""
+
+    # Topic anchors for semantic insight sampling — one representative query per insight type.
+    # Used by get_semantic_sample() to bias KNN retrieval toward topically-relevant docs.
+    _INSIGHT_ANCHORS: dict[str, str] = {
+        "trending_signals":    "breaking news emerging threats viral activity recent developments",
+        "active_narratives":   "narrative propaganda disinformation campaign information operation",
+        "hot_topics_sentiment": "sentiment emotion reaction controversy public discussion",
+        "relationship_network": "entity organization actor network connection relationship",
+    }
 
     def __init__(self):
         kwargs = {"hosts": [Config.ES_HOST]}
@@ -153,14 +161,75 @@ class ESClient:
                 return []
 
     def _hybrid_search(self, query: str, top_k: int, index_name: str) -> list[dict]:
-        """BM25 search only (KNN requires embeddings generation pipeline)."""
-        return self._keyword_search(query, top_k, index_name)
+        """Hybrid BM25 + KNN search using score summation.
+
+        Combines BM25 keyword matching with KNN vector similarity.
+        Since we are on a Basic license (RRF unavailable), we use ES 8.x native
+        combination where KNN scores and Query scores are summed.
+        Falls back to BM25-only if embedding fails or ES rejects the KNN body.
+        """
+        q = query[:self._MAX_QUERY_LEN]
+        try:
+            from src.datasource.embedding_client import get_embedding_client
+            vec = get_embedding_client().embed_one(query)
+        except Exception as e:
+            logger.warning(f"[es] embed failed, falling back to BM25: {e}")
+            return self._keyword_search(query, top_k, index_name)
+
+        # Basic license summation requires a boost on KNN to be competitive with BM25
+        # which can have scores > 10, while cosine similarity is capped at 1.0.
+        knn_boost = 10.0
+        
+        try:
+            resp = self._client.search(
+                index=index_name,
+                body={
+                    "size": top_k,
+                    "query": {
+                        "bool": {
+                            "should": [
+                                {
+                                    "multi_match": {
+                                        "query":                 q,
+                                        "fields":               ["text^2", "title^4", "content^2"],
+                                        "type":                 "best_fields",
+                                        "minimum_should_match": "30%",
+                                    }
+                                },
+                                {
+                                    "multi_match": {
+                                        "query":  q,
+                                        "fields": ["text^2", "title^4"],
+                                        "type":   "phrase",
+                                        "boost":  3.0,
+                                    }
+                                },
+                            ],
+                            "minimum_should_match": 1,
+                        }
+                    },
+                    "knn": {
+                        "field":          "embedding",
+                        "query_vector":   vec,
+                        "k":              top_k,
+                        "num_candidates": max(top_k * 5, 50),
+                        "boost":          knn_boost,
+                    },
+                    "_source": True,
+                },
+            )
+            return self._normalise_hits(resp["hits"]["hits"])
+        except Exception as e:
+            logger.warning(f"[es] hybrid search error ({e}), falling back to BM25")
+            return self._keyword_search(query, top_k, index_name)
 
     def _normalise_hits(self, hits: list) -> list[dict]:
         """Convert raw ES hits to the common {id, title, text, score, source, metadata} shape.
 
         `title` is promoted to the top level so downstream code (prompt builder,
         source formatter) doesn't need to dig into metadata.
+        RRF queries return null _score — coerce to 0.0 so downstream code never
+        receives None.
         """
         results = []
         for hit in hits:
@@ -183,7 +252,7 @@ class ESClient:
                 "id":       hit["_id"],
                 "title":    title,
                 "text":     text,
-                "score":    round(hit.get("_score", 0.0), 4),
+                "score":    round(hit.get("_score") or 0.0, 4),
                 "source":   "elasticsearch",
                 "metadata": metadata,
             })
@@ -217,6 +286,81 @@ class ESClient:
         except Exception as e:
             logger.error(f"[es] sample error: {e}")
             return []
+
+    def get_semantic_sample(
+        self,
+        n: int = 200,
+        index_name: str = None,
+        insight_type: str = None,
+    ) -> list[dict]:
+        """Return up to n documents biased toward the topic anchor for insight_type.
+
+        Uses KNN to find topically-relevant docs, then pads with random docs if
+        the index doesn't have vectors yet or if KNN returns fewer than n results.
+        Falls back entirely to get_sample_docs() if KNN is unavailable.
+        """
+        idx = index_name or self._default_index
+
+        anchor = self._INSIGHT_ANCHORS.get(insight_type or "", "")
+        if not anchor or not self._check_vector_field(idx):
+            # No anchor or no vectors yet — use random sampling
+            return self.get_sample_docs(n, index_name=idx)
+
+        try:
+            from src.datasource.embedding_client import get_embedding_client
+            vec = get_embedding_client().embed_one(anchor)
+        except Exception as e:
+            logger.warning(f"[es] semantic sample embed failed ({e}), using random sample")
+            return self.get_sample_docs(n, index_name=idx)
+
+        # KNN retrieval — fetch up to n * 2 candidates, deduplicate, then trim.
+        knn_size = min(n * 2, 1000)
+        try:
+            resp = self._client.search(
+                index=idx,
+                body={
+                    "size": knn_size,
+                    "knn": {
+                        "field":          "embedding",
+                        "query_vector":   vec,
+                        "k":              knn_size,
+                        "num_candidates": knn_size * 2,
+                    },
+                    "_source": True,
+                },
+            )
+            knn_hits = self._normalise_hits(resp["hits"]["hits"])
+        except Exception as e:
+            logger.warning(f"[es] KNN sample failed ({e}), using random sample")
+            return self.get_sample_docs(n, index_name=idx)
+
+        if len(knn_hits) >= n:
+            return knn_hits[:n]
+
+        # Pad with random docs not already in the KNN result set
+        existing_ids = {h["id"] for h in knn_hits}
+        needed = n - len(knn_hits)
+        try:
+            pad_resp = self._client.search(
+                index=idx,
+                body={
+                    "size": needed * 2,
+                    "query": {
+                        "function_score": {
+                            "functions": [{"random_score": {"seed": 99, "field": "_seq_no"}}],
+                            "boost_mode": "replace",
+                        }
+                    },
+                    "_source": True,
+                },
+            )
+            pad_hits = [h for h in self._normalise_hits(pad_resp["hits"]["hits"])
+                        if h["id"] not in existing_ids]
+            knn_hits.extend(pad_hits[:needed])
+        except Exception:
+            pass
+
+        return knn_hits
 
     # ── Raw Documents & Aggregations ────────────────────────────────────────────
 
@@ -313,7 +457,7 @@ class ESClient:
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
     def _check_vector_field(self, index_name: str) -> bool:
-        """Detect whether the index has a dense_vector field (cached)."""
+        """Detect whether the index has the 'embedding' dense_vector field (cached)."""
         if index_name in self._has_vector_cache:
             return self._has_vector_cache[index_name]
         try:
@@ -323,14 +467,21 @@ class ESClient:
                 .get("mappings", {})
                 .get("properties", {})
             )
-            has_vector = any(
-                v.get("type") == "dense_vector" for v in props.values()
-            )
+            has_vector = props.get("embedding", {}).get("type") == "dense_vector"
             self._has_vector_cache[index_name] = has_vector
             return has_vector
         except Exception:
             self._has_vector_cache[index_name] = False
             return False
+
+    def invalidate_vector_cache(self, index_name: str) -> None:
+        """Evict the cached vector-field result for index_name.
+
+        Call this after embed_docs completes so the next search() call
+        re-checks the mapping and activates hybrid mode.
+        """
+        self._has_vector_cache.pop(index_name, None)
+        logger.debug(f"[es] vector cache invalidated for '{index_name}'")
 
     def get_document_text(self, doc_id: str, index_name: str = None) -> str:
         """Fetch a single document by ID and return its text content.
@@ -467,6 +618,13 @@ class ESClient:
                         "classification": {"type": "keyword"},
                         "created_at":     {"type": "date"},
                         "tags":           {"type": "keyword"},
+                        # Dense vector for semantic search (fastembed bge-m3)
+                        "embedding": {
+                            "type":       "dense_vector",
+                            "dims":       Config.EMBED_DIMS,
+                            "index":      True,
+                            "similarity": "cosine",
+                        },
                     }
                 }
             }
@@ -537,12 +695,78 @@ class ESClient:
         logger.info(f"[es] Copied {total_copied} docs → '{dest_index}'")
         return total_copied
 
+    def bulk_update_embeddings(
+        self,
+        index_name: str,
+        updates: list[dict],
+    ) -> int:
+        """Bulk-update documents with their embedding vectors.
+
+        Each item in updates must have {"_id": str, "embedding": list[float]}.
+        Returns the number of successfully updated documents.
+        """
+        from elasticsearch import helpers as es_helpers
+
+        if not updates:
+            return 0
+
+        actions = [
+            {
+                "_op_type": "update",
+                "_index":   index_name,
+                "_id":      u["_id"],
+                "doc":      {"embedding": u["embedding"]},
+            }
+            for u in updates
+        ]
+        try:
+            success, _ = es_helpers.bulk(self._client, actions, raise_on_error=False)
+            return success
+        except Exception as e:
+            logger.error(f"[es] bulk_update_embeddings error: {e}")
+            return 0
+
+    def scroll_all(
+        self,
+        index_name: str,
+        batch_size: int = 500,
+        source_fields: Optional[list[str]] = None,
+    ):
+        """Generator: yield all documents in index_name in scroll batches.
+
+        Each yielded item is a list of raw ES hit dicts (with _id and _source).
+        """
+        body: dict = {"size": batch_size, "query": {"match_all": {}}}
+        if source_fields:
+            body["_source"] = source_fields
+
+        scroll_id = None
+        try:
+            resp = self._client.search(index=index_name, body=body, scroll="5m")
+            scroll_id = resp.get("_scroll_id")
+            while True:
+                hits = resp["hits"]["hits"]
+                if not hits:
+                    break
+                yield hits
+                if not scroll_id:
+                    break
+                resp = self._client.scroll(scroll_id=scroll_id, scroll="5m")
+                scroll_id = resp.get("_scroll_id")
+        finally:
+            if scroll_id:
+                try:
+                    self._client.clear_scroll(scroll_id=scroll_id)
+                except Exception:
+                    pass
+
     def delete_index(self, index_name: str) -> bool:
         """Delete an index.  Returns True if deleted, False if not found."""
         try:
             if not self._client.indices.exists(index=index_name):
                 return False
             self._client.indices.delete(index=index_name)
+            self._has_vector_cache.pop(index_name, None)
             logger.info(f"[es] Deleted index '{index_name}'")
             return True
         except Exception as e:

@@ -25,6 +25,9 @@ openai>=1.30.0
 # RAG / in-memory search
 rank-bm25>=0.2.2
 
+# Embeddings — CPU-only ONNX runtime for fastembed (GPU stays owned by SGLang)
+fastembed>=0.3.0
+
 # Config / utils
 python-dotenv>=1.0.0
 requests>=2.31.0
