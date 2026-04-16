@@ -42,6 +42,21 @@ class ESClient:
             logger.warning(f"[es] Connection test failed: {e}")
             return False
 
+    def _resolve_index(self, index_name: str) -> str:
+        """Resolve a logical index name to an actual ES index or pattern.
+        
+        If 'qsint_docs' or 'default' is requested but doesn't exist as a literal 
+        index, fallback to 'qsint_docs*' to match all source indices.
+        """
+        idx = index_name or self._default_index
+        if idx in ("qsint_docs", "default"):
+            try:
+                if not self._client.indices.exists(index=idx):
+                    return "qsint_docs*"
+            except Exception:
+                return "qsint_docs*"
+        return idx
+
     def list_indices(self, pattern: str = "qsint_docs*") -> list[str]:
         """Return a list of available indices matching a pattern."""
         try:
@@ -54,19 +69,27 @@ class ESClient:
             return []
 
     def get_index_stats(self, index_name: str = None) -> dict:
-        """Return doc count, field names, and cluster health for the index."""
-        idx = index_name or self._default_index
+        """Return doc count, field names, and cluster health for the index or pattern."""
+        idx = self._resolve_index(index_name)
         try:
             info    = self._client.indices.stats(index=idx)
             mapping = self._client.indices.get_mapping(index=idx)
             health  = self._client.cluster.health()
-            doc_count = info["indices"][idx]["primaries"]["docs"]["count"]
-            fields = list(
-                mapping.get(idx, {})
-                .get("mappings", {})
-                .get("properties", {})
-                .keys()
-            )
+            
+            # Handle aggregation if idx is a pattern or matches multiple indices
+            indices_data = info.get("indices", {})
+            if idx in indices_data:
+                # Literal match
+                doc_count = indices_data[idx]["primaries"]["docs"]["count"]
+                fields = list(mapping.get(idx, {}).get("mappings", {}).get("properties", {}).keys())
+            else:
+                # Pattern match - sum docs and union fields
+                doc_count = info.get("_all", {}).get("primaries", {}).get("docs", {}).get("count", 0)
+                all_fields = set()
+                for m in mapping.values():
+                    all_fields.update(m.get("mappings", {}).get("properties", {}).keys())
+                fields = sorted(list(all_fields))
+
             return {
                 "index":       idx,
                 "doc_count":   doc_count,
@@ -84,7 +107,7 @@ class ESClient:
 
     def search(self, query: str, top_k: int = 8, index_name: str = None) -> list[dict]:
         """Search the index and return normalised chunk dicts."""
-        idx = index_name or self._default_index
+        idx = self._resolve_index(index_name)
         if self._check_vector_field(idx):
             return self._hybrid_search(query, top_k, idx)
         return self._keyword_search(query, top_k, idx)
@@ -262,7 +285,7 @@ class ESClient:
 
     def get_sample_docs(self, n: int = 200, index_name: str = None) -> list[dict]:
         """Return up to n sampled documents for insights generation."""
-        idx = index_name or self._default_index
+        idx = self._resolve_index(index_name)
         try:
             resp = self._client.search(
                 index=idx,
@@ -299,7 +322,7 @@ class ESClient:
         the index doesn't have vectors yet or if KNN returns fewer than n results.
         Falls back entirely to get_sample_docs() if KNN is unavailable.
         """
-        idx = index_name or self._default_index
+        idx = self._resolve_index(index_name)
 
         anchor = self._INSIGHT_ANCHORS.get(insight_type or "", "")
         if not anchor or not self._check_vector_field(idx):
