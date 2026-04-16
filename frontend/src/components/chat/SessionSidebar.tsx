@@ -10,7 +10,7 @@ import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { useSessions, useCreateSession, useDeleteSession, useRenameSession } from '@/hooks/useSessions'
 import { useSessionStore } from '@/stores/sessionStore'
-import { useMessages } from '@/hooks/useSessions'
+import { getMessages } from '@/api/sessions'
 
 dayjs.extend(relativeTime)
 
@@ -34,15 +34,17 @@ export function SessionSidebar({ datasource, collapsed = false }: Props) {
   const deleteMut  = useDeleteSession()
   const renameMut  = useRenameSession()
 
-  const { refetch: fetchMessages } = useMessages(activeSessionId)
-
   const [editingId, setEditingId]     = useState<string | null>(null)
   const [editTitle, setEditTitle]     = useState('')
 
   const handleSelect = async (id: string) => {
     setActiveSession(id)
-    const { data } = await fetchMessages()
-    if (data) setMessages(data)
+    try {
+      const data = await getMessages(id)
+      if (data) setMessages(data)
+    } catch (e) {
+      console.error('Failed to load session messages', e)
+    }
   }
 
   const handleCreate = () => {

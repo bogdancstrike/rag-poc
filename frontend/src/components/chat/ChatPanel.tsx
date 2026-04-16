@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Layout, Input, Button, Typography, Space, theme, Empty, Spin } from 'antd'
-import { SendOutlined, StopOutlined } from '@ant-design/icons'
+import { Layout, Input, Button, Typography, Space, theme, Empty, Spin, Avatar, Tag } from 'antd'
+import { SendOutlined, StopOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useChat } from '@/hooks/useChat'
 import { useMessages } from '@/hooks/useSessions'
@@ -8,8 +8,9 @@ import { SessionSidebar } from './SessionSidebar'
 import { MessageBubble } from './MessageBubble'
 import type { Message } from '@/types'
 
-const { Content } = Layout
-const { Text } = Typography
+const { Content, Header } = Layout
+const { Text, Title } = Typography
+const { TextArea } = Input
 
 interface Props {
   datasource?: string
@@ -20,14 +21,11 @@ interface Props {
 
 /**
  * ChatPanel — full RAG chat with streaming, session management, and source citations.
- *
- * Layout:
- *   SessionSidebar (left) | message list + input box (right)
  */
 export function ChatPanel({ datasource, prefillQuery, onPrefillConsumed }: Props) {
   const { token }    = theme.useToken()
   const { sendMessage, isStreaming, cancel } = useChat()
-  const { activeSessionId, messages, streaming, pendingQuery, setPendingQuery } = useSessionStore()
+  const { activeSessionId, messages, streaming, pendingQuery, setPendingQuery, setActiveSession } = useSessionStore()
 
   const [input, setInput]         = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -52,14 +50,23 @@ export function ChatPanel({ datasource, prefillQuery, onPrefillConsumed }: Props
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Small delay to ensure rendering is complete
+    const timer = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }, 100)
+    return () => clearTimeout(timer)
   }, [messages, streaming])
 
   const handleSend = () => {
     const q = input.trim()
-    if (!q) return
+    if (!q || isStreaming) return
     setInput('')
     sendMessage(q)
+  }
+
+  const handleNewChat = () => {
+    setActiveSession(null)
+    setInput('')
   }
 
   // Combine persisted messages + the in-progress streaming message
@@ -79,92 +86,157 @@ export function ChatPanel({ datasource, prefillQuery, onPrefillConsumed }: Props
   ]
 
   return (
-    <Layout style={{ height: '100%', minHeight: 0, background: 'transparent' }}>
+    <Layout style={{ height: '100%', minHeight: 0, background: token.colorBgLayout }}>
       <SessionSidebar datasource={datasource} collapsed={sidebarCollapsed} />
 
       <Layout style={{ background: 'transparent', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {/* Modern Header */}
+        <Header style={{ 
+          background: token.colorBgContainer, 
+          padding: '0 20px', 
+          height: 56, 
+          lineHeight: '56px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          zIndex: 10
+        }}>
+          <Space size={12}>
+            <Avatar size="small" icon={<RobotOutlined />} style={{ backgroundColor: token.colorInfo }} />
+            <Title level={5} style={{ margin: 0, fontSize: 15 }}>
+              Intelligence Assistant
+            </Title>
+            {activeSessionId && (
+              <Tag color="default" style={{ margin: 0, fontSize: 10 }}>
+                ACTIVE SESSION
+              </Tag>
+            )}
+          </Space>
+          
+          <Button 
+            type="primary" 
+            icon={<PlusOutlined />} 
+            onClick={handleNewChat}
+            size="small"
+            style={{ borderRadius: 6 }}
+          >
+            New Investigation
+          </Button>
+        </Header>
+
         {/* Messages area */}
         <Content
           style={{
             flex:      1,
             overflowY: 'auto',
-            padding:   '16px',
+            padding:   '24px 20px',
             display:   'flex',
             flexDirection: 'column',
-            gap:       12,
+            gap:       20,
+            maxWidth:  1000,
+            width:     '100%',
+            margin:    '0 auto',
           }}
         >
           {isLoading && <Spin style={{ alignSelf: 'center', marginTop: 40 }} />}
 
           {!isLoading && allMessages.length === 0 && (
-            <Empty
-              style={{ marginTop: 60 }}
-              description={
-                <Text style={{ color: token.colorTextDescription }}>
-                  {activeSessionId
-                    ? 'No messages yet — ask a question to begin.'
-                    : 'Select or create a session from the sidebar to start chatting.'}
-                </Text>
-              }
-            />
+            <div style={{ 
+                display: 'flex', 
+                flexDirection: 'column', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                height: '70%',
+                opacity: 0.8
+            }}>
+              <RobotOutlined style={{ fontSize: 48, color: token.colorPrimary, marginBottom: 20 }} />
+              <Title level={4} style={{ margin: '0 0 8px' }}>How can I assist your investigation?</Title>
+              <Text type="secondary" style={{ textAlign: 'center', maxWidth: 400 }}>
+                Ask questions about the current intelligence corpus. I can help synthesize narratives, 
+                identify key actors, and track emerging signals.
+              </Text>
+            </div>
           )}
 
           {allMessages.map((msg) => (
             <MessageBubble key={msg.id} message={msg} />
           ))}
-          <div ref={bottomRef} />
+          <div ref={bottomRef} style={{ height: 1 }} />
         </Content>
 
-        {/* Input box */}
+        {/* Improved Input area */}
         <div
           style={{
-            padding:    '12px 16px',
-            borderTop:  `1px solid ${token.colorBorderSecondary}`,
-            background: token.colorBgContainer,
+            padding:    '16px 20px 24px',
+            background: 'transparent',
+            maxWidth:   1000,
+            width:      '100%',
+            margin:     '0 auto',
             flexShrink: 0,
           }}
         >
-          <Space.Compact style={{ width: '100%' }}>
-            <Input
+          <div style={{
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorder}`,
+            borderRadius: 12,
+            padding: '8px 12px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4
+          }}>
+            <TextArea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onPressEnter={(e) => { if (!e.shiftKey) handleSend() }}
+              onPressEnter={(e) => { 
+                if (!e.shiftKey) {
+                  e.preventDefault()
+                  handleSend() 
+                }
+              }}
               placeholder={
                 activeSessionId
-                  ? 'Ask about the data… (Enter to send)'
-                  : 'Create or select a session first'
+                  ? 'Ask about the data… (Shift+Enter for new line)'
+                  : 'Create a new investigation to start chatting'
               }
-              disabled={!activeSessionId || isStreaming}
-              style={{ fontSize: 13 }}
-              autoComplete="off"
+              disabled={isStreaming}
+              variant="borderless"
+              autoSize={{ minRows: 1, maxRows: 6 }}
+              style={{ padding: '4px 0', fontSize: 14 }}
             />
-            {isStreaming ? (
-              <Button
-                type="default"
-                icon={<StopOutlined />}
-                onClick={cancel}
-                style={{ flexShrink: 0 }}
-              >
-                Stop
-              </Button>
-            ) : (
-              <Button
-                type="primary"
-                icon={<SendOutlined />}
-                onClick={handleSend}
-                disabled={!activeSessionId || !input.trim()}
-                style={{ flexShrink: 0 }}
-              >
-                Send
-              </Button>
-            )}
-          </Space.Compact>
-
-          {isStreaming && (
-            <Text style={{ fontSize: 11, color: token.colorTextDescription, marginTop: 4, display: 'block' }}>
-              Generating response…
-            </Text>
-          )}
+            
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ fontSize: 11, color: token.colorTextQuaternary }}>
+                {isStreaming ? 'Synthesizing intelligence...' : 'Press Enter to send'}
+              </Text>
+              
+              {isStreaming ? (
+                <Button
+                  type="text"
+                  danger
+                  icon={<StopOutlined />}
+                  onClick={cancel}
+                  size="small"
+                >
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  type="primary"
+                  shape="circle"
+                  icon={<SendOutlined style={{ fontSize: 12 }} />}
+                  onClick={handleSend}
+                  disabled={!input.trim()}
+                  size="small"
+                />
+              )}
+            </div>
+          </div>
+          
+          <Text style={{ fontSize: 10, color: token.colorTextQuaternary, marginTop: 8, display: 'block', textAlign: 'center' }}>
+            AI-generated content may require human verification. Sources are provided for every claim.
+          </Text>
         </div>
       </Layout>
     </Layout>

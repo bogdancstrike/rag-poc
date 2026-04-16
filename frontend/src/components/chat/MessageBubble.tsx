@@ -1,23 +1,12 @@
 import { useMemo } from 'react'
-import { Typography, Tag, Space, theme, Button, Tooltip, Progress, Collapse } from 'antd'
-import { LinkOutlined, CalendarOutlined, TagOutlined } from '@ant-design/icons'
+import { Typography, Tag, Space, theme, Button, Tooltip, Progress, Collapse, Avatar } from 'antd'
+import { LinkOutlined, CalendarOutlined, TagOutlined, RobotOutlined, UserOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useNavigate } from 'react-router-dom'
-import type { Message } from '@/types'
+import type { Message, Source } from '@/types'
 
 const { Text } = Typography
-
-interface Source {
-  index?: string
-  id: string
-  score: number
-  text?: string
-  title?: string
-  date?: string
-  datasource?: string
-  classification?: string
-  sentiment?: string
-}
 
 interface Props {
   message: Message & { streaming?: boolean }
@@ -35,7 +24,6 @@ function CitedContent({ content, sources }: { content: string; sources: Source[]
 
   // Split on [#N] or [doc:ID] patterns
   const parts = useMemo(() => {
-    // Matches [#1], [#2] OR [doc:uuid]
     const regex = /\[(?:#(\d+)|doc:([^\]"]+?)(?:\s+"[^"]*")?)\]/g
     const result: Array<{ type: 'text' | 'cite'; value: string; rank?: string | number }> = []
     let last = 0
@@ -63,73 +51,96 @@ function CitedContent({ content, sources }: { content: string; sources: Source[]
   const hasCitations = parts.some((p) => p.type === 'cite')
   if (!hasCitations) {
     return (
-      <ReactMarkdown components={mdComponents(token)}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents(token)}>
         {content}
       </ReactMarkdown>
     )
   }
 
-  // Render text segments via markdown, citations as inline superscript badges
   return (
-    <span>
+    <div className="cited-content">
       {parts.map((p, i) =>
         p.type === 'cite' ? (
-          <Tooltip key={i} title={`Source #${p.rank}`}>
+          <Tooltip key={i} title={`Source #${p.rank}`} mouseEnterDelay={0.5}>
             <Tag
               color="blue"
               style={{
-                fontSize: 9,
+                fontSize: 10,
                 padding: '0 4px',
-                lineHeight: '16px',
-                margin: '0 1px',
+                lineHeight: '14px',
+                margin: '0 2px',
                 verticalAlign: 'super',
-                cursor: 'default',
-                borderRadius: 3,
+                cursor: 'pointer',
+                borderRadius: 4,
+                fontWeight: 600,
               }}
             >
-              [#{p.rank}]
+              #{p.rank}
             </Tag>
           </Tooltip>
         ) : (
-          <ReactMarkdown key={i} components={mdComponents(token)}>
+          <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} components={mdComponents(token)}>
             {p.value}
           </ReactMarkdown>
         ),
       )}
-    </span>
+    </div>
   )
 }
 
-function mdComponents(token: ReturnType<typeof theme.useToken>['token']) {
+function mdComponents(token: any) {
   return {
     p: ({ children }: any) => (
-      <p style={{ margin: '0 0 8px', fontSize: 13, lineHeight: 1.65 }}>{children}</p>
+      <p style={{ margin: '0 0 12px', fontSize: 14, lineHeight: 1.6, color: 'inherit' }}>{children}</p>
     ),
     ul: ({ children }: any) => (
-      <ul style={{ paddingLeft: 18, margin: '4px 0 8px' }}>{children}</ul>
+      <ul style={{ paddingLeft: 20, margin: '8px 0 12px' }}>{children}</ul>
     ),
     ol: ({ children }: any) => (
-      <ol style={{ paddingLeft: 18, margin: '4px 0 8px' }}>{children}</ol>
+      <ol style={{ paddingLeft: 20, margin: '8px 0 12px' }}>{children}</ol>
     ),
     li: ({ children }: any) => (
-      <li style={{ marginBottom: 2, fontSize: 13 }}>{children}</li>
+      <li style={{ marginBottom: 4, fontSize: 14 }}>{children}</li>
     ),
     strong: ({ children }: any) => (
-      <strong style={{ fontWeight: 600 }}>{children}</strong>
+      <strong style={{ fontWeight: 600, color: token.colorPrimaryActive }}>{children}</strong>
     ),
     code: ({ children }: any) => (
       <code style={{
         background:   token.colorFillTertiary,
-        padding:      '1px 5px',
-        borderRadius: 3,
-        fontSize:     12,
+        padding:      '2px 6px',
+        borderRadius: 4,
+        fontSize:     '0.9em',
         fontFamily:   'monospace',
       }}>
         {children}
       </code>
     ),
-    h3: ({ children }: any) => (
-      <h3 style={{ fontSize: 13, fontWeight: 600, margin: '12px 0 4px' }}>{children}</h3>
+    h1: ({ children }: any) => <h1 style={{ fontSize: 20, margin: '16px 0 8px' }}>{children}</h1>,
+    h2: ({ children }: any) => <h2 style={{ fontSize: 18, margin: '14px 0 8px' }}>{children}</h2>,
+    h3: ({ children }: any) => <h3 style={{ fontSize: 16, margin: '12px 0 6px' }}>{children}</h3>,
+    table: ({ children }: any) => (
+      <div style={{ overflowX: 'auto', marginBottom: 16, borderRadius: 8, border: `1px solid ${token.colorBorderSecondary}` }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>{children}</table>
+      </div>
+    ),
+    thead: ({ children }: any) => <thead style={{ background: token.colorFillAlter }}>{children}</thead>,
+    th: ({ children }: any) => (
+      <th style={{ padding: '8px 12px', textAlign: 'left', borderBottom: `2px solid ${token.colorBorderSecondary}`, fontWeight: 600 }}>{children}</th>
+    ),
+    td: ({ children }: any) => (
+      <td style={{ padding: '8px 12px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>{children}</td>
+    ),
+    blockquote: ({ children }: any) => (
+      <blockquote style={{ 
+        margin: '0 0 12px', 
+        paddingLeft: 16, 
+        borderLeft: `4px solid ${token.colorBorder}`,
+        color: token.colorTextDescription,
+        fontStyle: 'italic'
+      }}>
+        {children}
+      </blockquote>
     ),
   }
 }
@@ -155,61 +166,51 @@ function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank
     <div
       style={{
         borderLeft:   `3px solid ${color}`,
-        background:   token.colorFillAlter,
+        background:   token.colorBgElevated,
         borderRadius: `0 ${token.borderRadius}px ${token.borderRadius}px 0`,
-        padding:      '8px 12px',
+        padding:      '10px 14px',
         fontSize:     12,
+        boxShadow:    '0 1px 2px rgba(0,0,0,0.03)',
+        transition:   'all 0.2s',
+        marginBottom: 4
       }}
     >
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-        <Space size={4} wrap style={{ flex: 1 }}>
-          <Tag color="blue" style={{ fontSize: 10, margin: 0, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+        <Space size={6} wrap style={{ flex: 1 }}>
+          <Tag color="blue" style={{ fontSize: 11, margin: 0, fontWeight: 600 }}>
             {rankLabel}
           </Tag>
           {src.title ? (
-            <Text strong style={{ fontSize: 12 }}>{src.title}</Text>
+            <Text strong style={{ fontSize: 13, color: token.colorTextHeading }}>{src.title}</Text>
           ) : (
-            <Text type="secondary" style={{ fontSize: 11, fontFamily: 'monospace' }}>
+            <Text type="secondary" style={{ fontSize: 12, fontFamily: 'monospace' }}>
               {src.id.slice(0, 16)}…
             </Text>
           )}
         </Space>
-        <Space size={4} style={{ flexShrink: 0 }}>
-          <Tooltip title={`Relevance: ${(score * 100).toFixed(0)}% of best match`}>
-            <Tag
-              style={{ fontSize: 10, margin: 0 }}
-              color={score >= 0.75 ? 'success' : score >= 0.45 ? 'warning' : 'error'}
-            >
-              {(score * 100).toFixed(0)}%
-            </Tag>
+        <Space size={4}>
+          <Tooltip title={`Relevance: ${(score * 100).toFixed(0)}%`}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+               <div style={{ width: 40, height: 4, background: token.colorFillTertiary, borderRadius: 2 }}>
+                  <div style={{ width: `${score * 100}%`, height: '100%', background: color, borderRadius: 2 }} />
+               </div>
+               <Text style={{ fontSize: 10, color: token.colorTextDescription }}>{(score * 100).toFixed(0)}%</Text>
+            </div>
           </Tooltip>
           {navUrl && (
-            <Tooltip title="Open in Data Exploration">
-              <Button
-                size="small"
-                type="text"
-                icon={<LinkOutlined />}
-                style={{ height: 20, padding: '0 4px', fontSize: 11 }}
-                onClick={() => navigate(navUrl)}
-              />
-            </Tooltip>
+            <Button
+              size="small"
+              type="text"
+              icon={<LinkOutlined />}
+              style={{ height: 24, width: 24, fontSize: 12 }}
+              onClick={() => navigate(navUrl)}
+            />
           )}
         </Space>
       </div>
 
-      {/* Relevance bar */}
-      <Progress
-        percent={Math.round(score * 100)}
-        showInfo={false}
-        size={[undefined, 2]}
-        strokeColor={color}
-        style={{ margin: '4px 0 6px' }}
-      />
-
-      {/* Metadata chips */}
       {(src.date || src.classification || src.sentiment) && (
-        <Space size={4} wrap style={{ marginBottom: 6 }}>
+        <Space size={4} wrap style={{ marginBottom: 8 }}>
           {src.date && (
             <Tag icon={<CalendarOutlined />} style={{ fontSize: 10, margin: 0 }}>
               {src.date}
@@ -223,8 +224,8 @@ function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank
           {src.sentiment && (
             <Tag
               color={
-                src.sentiment === 'positive' || src.sentiment === 'supportive' ? 'green'
-                  : src.sentiment === 'negative' || src.sentiment === 'hostile' ? 'red'
+                src.sentiment === 'positive' || src.sentiment === 'supportive' ? 'success'
+                  : src.sentiment === 'negative' || src.sentiment === 'hostile' ? 'error'
                   : 'default'
               }
               style={{ fontSize: 10, margin: 0 }}
@@ -235,10 +236,9 @@ function SourceCard({ src, fallbackRank, navigate }: { src: Source; fallbackRank
         </Space>
       )}
 
-      {/* Text preview */}
       {src.text && (
-        <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.5, display: 'block' }}>
-          {src.text.slice(0, 260)}{(src.text.length ?? 0) > 260 ? '…' : ''}
+        <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.6, display: 'block', fontStyle: 'italic' }}>
+          "{src.text.slice(0, 300)}{(src.text.length ?? 0) > 300 ? '…' : ''}"
         </Text>
       )}
     </div>
@@ -251,81 +251,94 @@ export function MessageBubble({ message }: Props) {
   const isUser     = message.role === 'user'
   const sources    = (message.sources ?? []) as Source[]
 
+  const containerStyle: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: isUser ? 'row-reverse' : 'row',
+    gap: 12,
+    width: '100%',
+    padding: '4px 0',
+  }
+
   const bubbleStyle: React.CSSProperties = {
-    maxWidth:     '88%',
-    padding:      '10px 14px',
-    borderRadius: token.borderRadiusLG,
-    fontSize:     13,
+    maxWidth:     'calc(100% - 48px)',
+    padding:      '12px 16px',
+    borderRadius: isUser 
+        ? `${token.borderRadiusLG}px 4px ${token.borderRadiusLG}px ${token.borderRadiusLG}px`
+        : `4px ${token.borderRadiusLG}px ${token.borderRadiusLG}px ${token.borderRadiusLG}px`,
+    fontSize:     14,
     lineHeight:   1.6,
+    boxShadow:    isUser ? 'none' : '0 1px 2px rgba(0,0,0,0.05)',
     ...(isUser
       ? {
           background: token.colorPrimary,
           color:      '#fff',
-          alignSelf:  'flex-end',
-          marginLeft: 'auto',
         }
       : {
           background: token.colorBgContainer,
           border:     `1px solid ${token.colorBorderSecondary}`,
-          alignSelf:  'flex-start',
+          color:      token.colorText,
         }),
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', gap: 6 }}>
-      {/* Message bubble */}
-      <div style={bubbleStyle}>
-        {isUser ? (
-          <Text style={{ color: '#fff', fontSize: 13, whiteSpace: 'pre-wrap' }}>
-            {message.content}
-          </Text>
-        ) : (
-          <div style={{ color: token.colorText }}>
-            <CitedContent content={message.content} sources={sources} />
-            {message.streaming && (
-              <span
-                style={{
-                  display:     'inline-block',
-                  width:       8,
-                  height:      14,
-                  background:  token.colorPrimary,
-                  borderRadius: 2,
-                  animation:   'blink 1s step-end infinite',
-                  verticalAlign: 'middle',
-                }}
-              />
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Sources panel — only for assistant messages with sources */}
-      {!isUser && sources.length > 0 && (
-        <div style={{ maxWidth: '88%' }}>
-          {sources.length <= 3 ? (
-            /* ≤ 3 sources: always visible */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <Text style={{ fontSize: 11, color: token.colorTextTertiary, marginBottom: 2 }}>
-                {sources.length} source{sources.length > 1 ? 's' : ''} used
-              </Text>
-              {sources.map((src, i) => (
-                <SourceCard key={src.id} src={src} fallbackRank={i + 1} navigate={navigate} />
-              ))}
-            </div>
+    <div style={containerStyle}>
+      <Avatar 
+        size="small" 
+        icon={isUser ? <UserOutlined /> : <RobotOutlined />}
+        style={{ 
+            backgroundColor: isUser ? token.colorPrimary : token.colorInfo,
+            flexShrink: 0,
+            marginTop: 4
+        }} 
+      />
+      
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, maxWidth: '85%' }}>
+        <div style={bubbleStyle}>
+          {isUser ? (
+            <Text style={{ color: '#fff', fontSize: 14, whiteSpace: 'pre-wrap' }}>
+              {message.content}
+            </Text>
           ) : (
-            /* > 3 sources: collapsible */
+            <div style={{ position: 'relative' }}>
+              <CitedContent content={message.content} sources={sources} />
+              {message.streaming && (
+                <span
+                  style={{
+                    display:     'inline-block',
+                    width:       8,
+                    height:      15,
+                    background:  token.colorPrimary,
+                    borderRadius: 2,
+                    animation:   'blink 1s step-end infinite',
+                    verticalAlign: 'middle',
+                    marginLeft: 4,
+                    opacity: 0.7
+                  }}
+                />
+              )}
+            </div>
+          )}
+        </div>
+
+        {!isUser && sources.length > 0 && (
+          <div style={{ marginTop: 4 }}>
             <Collapse
               ghost
               size="small"
+              expandIconPlacement="end"
+              style={{ background: 'transparent' }}
               items={[{
                 key: '1',
                 label: (
-                  <Text style={{ fontSize: 11, color: token.colorTextTertiary }}>
-                    {sources.length} sources used — click to expand
-                  </Text>
+                  <Space size={6}>
+                    <InfoCircleOutlined style={{ fontSize: 12, color: token.colorTextTertiary }} />
+                    <Text style={{ fontSize: 12, color: token.colorTextTertiary, fontWeight: 500 }}>
+                      {sources.length} intelligence source{sources.length > 1 ? 's' : ''} cited
+                    </Text>
+                  </Space>
                 ),
                 children: (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 4 }}>
                     {sources.map((src, i) => (
                       <SourceCard key={src.id} src={src} fallbackRank={i + 1} navigate={navigate} />
                     ))}
@@ -333,16 +346,15 @@ export function MessageBubble({ message }: Props) {
                 ),
               }]}
             />
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* "No sources" hint when LLM responded but retrieval found nothing */}
-      {!isUser && !message.streaming && sources.length === 0 && message.content && (
-        <Text style={{ fontSize: 11, color: token.colorTextQuaternary, maxWidth: '88%' }}>
-          No documents retrieved for this query
-        </Text>
-      )}
+        {!isUser && !message.streaming && sources.length === 0 && message.content && (
+          <Text style={{ fontSize: 12, color: token.colorTextQuaternary, fontStyle: 'italic', paddingLeft: 4 }}>
+            No classified documents retrieved for this query.
+          </Text>
+        )}
+      </div>
     </div>
   )
 }
