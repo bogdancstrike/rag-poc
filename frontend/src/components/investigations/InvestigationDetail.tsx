@@ -251,8 +251,8 @@ export function InvestigationDetail({ id }: Props) {
         </Space>
       ),
       children: (
-        <div style={{ height: 'calc(100vh - 152px)', padding: 16, overflowY: 'auto' }}>
-          <DataTable datasource={inv.index_name} enableUrlSync />
+        <div style={{ height: 'calc(100vh - 152px)', padding: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <DataTable datasource={inv.index_name} enableUrlSync yOffset={380} />
         </div>
       ),
     },

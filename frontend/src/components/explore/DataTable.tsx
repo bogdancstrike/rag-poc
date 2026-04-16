@@ -849,11 +849,14 @@ interface Props {
    * `idx` param is only written when datasource is empty (global explore mode).
    */
   enableUrlSync?: boolean
+  /** Vertical offset for table scroll height calculation. Increase if pagination is hidden. */
+  yOffset?: number
 }
 
 export function DataTable({
   datasource, initialDocId, onDocSelect, onSendToRag,
   controlledQuery, controlledFilters, showSourceIndex, enableUrlSync,
+  yOffset = 360,
 }: Props) {
   const { token } = theme.useToken()
   const [internalQuery, setInternalQuery] = useState('')
@@ -1318,7 +1321,7 @@ export function DataTable({
                 showTotal: (total) => `${total} documents`,
                 size: 'small',
               }}
-              scroll={{ y: 'calc(100vh - 220px)', x: 'max-content' }}
+              scroll={{ y: `calc(100vh - ${yOffset}px)`, x: 'max-content' }}
             />
           )}
         </div>

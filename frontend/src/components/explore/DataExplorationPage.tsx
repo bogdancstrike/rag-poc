@@ -223,14 +223,14 @@ export function DataExplorationPage() {
         </Button>
       </div>
 
-      {/* Table */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+      <div style={{ flex: 1, padding: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <DataTable
           datasource=""
           controlledQuery={appliedState.query}
           controlledFilters={dtFilters}
           showSourceIndex
           enableUrlSync
+          yOffset={280}
         />
       </div>
 
