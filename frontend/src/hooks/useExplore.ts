@@ -237,10 +237,10 @@ export function useDocumentStatuses(datasource: string) {
 export function useSetDocumentStatus(datasource: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ docId, status }: { docId: string; status: DocReviewStatus | null }) =>
-      setDocumentStatus(datasource, docId, status),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['docStatuses', datasource] })
+    mutationFn: ({ docId, status, datasource: dsOverride }: { docId: string; status: DocReviewStatus | null; datasource?: string }) =>
+      setDocumentStatus(dsOverride || datasource, docId, status),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['docStatuses', vars.datasource || datasource] })
     },
   })
 }
@@ -259,10 +259,10 @@ export function useDocumentLabels(datasource: string) {
 export function useSetDocumentLabels(datasource: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ docId, labels }: { docId: string; labels: string[] }) =>
-      setDocumentLabels(datasource, docId, labels),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['docLabels', datasource] })
+    mutationFn: ({ docId, labels, datasource: dsOverride }: { docId: string; labels: string[]; datasource?: string }) =>
+      setDocumentLabels(dsOverride || datasource, docId, labels),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['docLabels', vars.datasource || datasource] })
     },
   })
 }
