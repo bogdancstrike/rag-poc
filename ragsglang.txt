@@ -1,0 +1,57 @@
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.9.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[2026-04-16 11:27:39] INFO:     127.0.0.1:40424 - "GET /model_info HTTP/1.1" 200 OK
+[2026-04-16 11:27:42] INFO:     127.0.0.1:40440 - "GET /health HTTP/1.1" 503 Service Unavailable
+[2026-04-16 11:27:45] INFO:     127.0.0.1:40432 - "POST /generate HTTP/1.1" 200 OK
+[2026-04-16 11:27:58] INFO:     127.0.0.1:53826 - "GET /health HTTP/1.1" 200 OK
+[2026-04-16 11:28:14] INFO:     127.0.0.1:49660 - "GET /health HTTP/1.1" 200 OK
+[2026-04-16 11:28:27] INFO:     10.0.6.1:34660 - "GET /model_info HTTP/1.1" 200 OK
+[2026-04-16 11:28:29] INFO:     10.0.6.1:34682 - "GET /v1/models/Qwen/Qwen2.5-3B-Instruct HTTP/1.1" 404 Not Found
+[2026-04-16 11:28:30] INFO:     127.0.0.1:57002 - "GET /health HTTP/1.1" 200 OK
+[2026-04-16 11:28:46] INFO:     127.0.0.1:45138 - "GET /health HTTP/1.1" 200 OK
+[2026-04-16 11:28:50] INFO:     10.0.6.1:34094 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:28:51] INFO:     10.0.6.1:34052 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:28:51] INFO:     10.0.6.1:34060 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:28:51] INFO:     10.0.6.1:34066 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:28:54] INFO:     10.0.6.1:34002 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:28:55] INFO:     10.0.6.1:34044 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:28:57] INFO:     10.0.6.1:34024 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:00] INFO:     10.0.6.1:34030 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:02] INFO:     10.0.6.1:34052 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:02] INFO:     127.0.0.1:48060 - "GET /health HTTP/1.1" 200 OK
+[2026-04-16 11:29:02] INFO:     10.0.6.1:34080 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:04] INFO:     10.0.6.1:34066 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:06] INFO:     10.0.6.1:34094 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:06] INFO:     10.0.6.1:34010 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:10] INFO:     10.0.6.1:34060 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:11] INFO:     10.0.6.1:34044 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:11] INFO:     10.0.6.1:34002 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:12] INFO:     10.0.6.1:34030 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:13] INFO:     10.0.6.1:34024 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:14] INFO:     10.0.6.1:34066 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:16] INFO:     10.0.6.1:34080 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:17] INFO:     10.0.6.1:34052 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:18] INFO:     127.0.0.1:54942 - "GET /health HTTP/1.1" 200 OK
+[2026-04-16 11:29:22] INFO:     10.0.6.1:34044 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:22] INFO:     10.0.6.1:34002 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:25] INFO:     10.0.6.1:34024 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:30] INFO:     10.0.6.1:34052 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:34] INFO:     127.0.0.1:49836 - "GET /health HTTP/1.1" 200 OK
+[2026-04-16 11:29:39] INFO:     10.0.6.1:34024 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-04-16 11:29:50] INFO:     127.0.0.1:41514 - "GET /health HTTP/1.1" 200 OK

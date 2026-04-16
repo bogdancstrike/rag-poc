@@ -203,78 +203,48 @@ class TestDispatchTask:
 
 
 # ===========================================================================
-# 4. handle_insight_coordinator publishes sub-tasks when docs exist
+# 4. handle_insight_coordinator delegates to engine.run_all_insights
 # ===========================================================================
 
 class TestHandleInsightCoordinator:
 
-    def test_publishes_subtasks_when_docs_found(self):
-        sample_docs = [{"id": "1"}, {"id": "2"}, {"id": "3"}]
-        mock_retriever = MagicMock()
-        mock_retriever.get_sample.return_value = sample_docs
+    def test_delegates_to_run_all_insights(self):
+        """handle_insight_coordinator should call engine.run_all_insights, not fan-out via Kafka."""
+        mock_engine = MagicMock()
 
-        published = []
+        with patch("src.rag.insights_engine.get_insights_engine", return_value=mock_engine):
+            from src.worker.task_handlers import handle_insight_coordinator
+            handle_insight_coordinator({"datasource": "my_ds"})
 
-        def fake_publish(task):
-            published.append(task)
-
-        # Imports in handle_insight_coordinator are lazy — patch the source modules
-        with patch("src.rag.retriever.get_retriever", return_value=mock_retriever):
-            with patch("src.rag.insights_engine.get_insights_engine", return_value=MagicMock()):
-                with patch("src.worker.kafka_producer.publish_task", fake_publish):
-                    from src.worker.task_handlers import handle_insight_coordinator
-                    handle_insight_coordinator({"datasource": "my_ds"})
-
-        task_types = [t["task_type"] for t in published]
-        assert "insight_stats" in task_types
-        assert task_types.count("insight_ai") == 2  # summary + graph
-
-        for t in published:
-            assert t["datasource"] == "my_ds"
-            assert "sample_hash" in t
+        mock_engine.run_all_insights.assert_called_once_with("my_ds", force=False)
 
     def test_ai_tasks_have_correct_insight_types(self):
-        sample_docs = [{"id": "a"}, {"id": "b"}]
-        mock_retriever = MagicMock()
-        mock_retriever.get_sample.return_value = sample_docs
+        """force flag is forwarded correctly."""
+        mock_engine = MagicMock()
 
-        published = []
+        with patch("src.rag.insights_engine.get_insights_engine", return_value=mock_engine):
+            from src.worker.task_handlers import handle_insight_coordinator
+            handle_insight_coordinator({"datasource": "ds", "force": True})
 
-        with patch("src.rag.retriever.get_retriever", return_value=mock_retriever):
-            with patch("src.rag.insights_engine.get_insights_engine", return_value=MagicMock()):
-                with patch("src.worker.kafka_producer.publish_task", lambda t: published.append(t)):
-                    from src.worker.task_handlers import handle_insight_coordinator
-                    handle_insight_coordinator({"datasource": "ds"})
-
-        ai_tasks = [t for t in published if t["task_type"] == "insight_ai"]
-        insight_types = {t["insight_type"] for t in ai_tasks}
-        assert insight_types == {"summary", "graph"}
+        mock_engine.run_all_insights.assert_called_once_with("ds", force=True)
 
 
 # ===========================================================================
-# 5. handle_insight_coordinator sets error status when no docs found
+# 5. handle_insight_coordinator forwards force=False by default
 # ===========================================================================
 
 class TestHandleInsightCoordinatorNoDocs:
 
     def test_sets_error_status_when_no_docs(self):
-        mock_retriever = MagicMock()
-        mock_retriever.get_sample.return_value = []  # empty
-
+        """run_all_insights handles the no-docs case internally; coordinator just delegates."""
         mock_engine = MagicMock()
 
-        with patch("src.rag.retriever.get_retriever", return_value=mock_retriever):
-            with patch("src.rag.insights_engine.get_insights_engine", return_value=mock_engine):
-                from src.worker.task_handlers import handle_insight_coordinator
-                handle_insight_coordinator({"datasource": "empty_ds"})
+        with patch("src.rag.insights_engine.get_insights_engine", return_value=mock_engine):
+            from src.worker.task_handlers import handle_insight_coordinator
+            handle_insight_coordinator({"datasource": "empty_ds"})
 
-        # Should set error status for all three task types
-        assert mock_engine._set_task_status.call_count == 3
-        calls = mock_engine._set_task_status.call_args_list
-        set_types = {c[0][1] for c in calls}
-        assert set_types == {"summary", "graph", "stats"}
-        for c in calls:
-            assert c[0][2] == "error"  # status arg
+        # Coordinator always delegates to run_all_insights — error handling is internal
+        mock_engine.run_all_insights.assert_called_once_with("empty_ds", force=False)
 
 
 # ===========================================================================

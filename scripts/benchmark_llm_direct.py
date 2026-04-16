@@ -98,15 +98,18 @@ RELATIONSHIP_NETWORK_TASK = {
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def discover_model(base_url: str) -> str:
-    tags_url = base_url.replace("/v1", "/api/tags")
-    resp = requests.get(tags_url, timeout=5)
+    """Discover the active model via the standard OpenAI GET /v1/models endpoint.
+
+    Works with SGLang, vLLM, and Ollama.
+    """
+    resp = requests.get(f"{base_url}/models", timeout=10)
     resp.raise_for_status()
-    models = resp.json().get("models", [])
+    models = resp.json().get("data", [])
     if not models:
-        raise RuntimeError("No models found on Ollama")
-    # Prefer instruct models
-    instruct = [m["name"] for m in models if "instruct" in m["name"].lower()]
-    return instruct[0] if instruct else models[0]["name"]
+        raise RuntimeError("No models found on inference server")
+    # Prefer instruct/chat variants
+    instruct = [m["id"] for m in models if "instruct" in m.get("id", "").lower()]
+    return instruct[0] if instruct else models[0]["id"]
 
 
 def fetch_es_docs(es_host: str, index: str, count: int) -> list[dict]:
@@ -375,7 +378,7 @@ def main():
         sys.exit(1)
 
     # Build OpenAI client pointing at Ollama
-    client = OpenAI(base_url=args.llm, api_key="ollama", timeout=LLM_TIMEOUT)
+    client = OpenAI(base_url=args.llm, api_key="EMPTY", timeout=LLM_TIMEOUT)
 
     # Warmup call (not included in results)
     print("\nWarmup call (not recorded)...")

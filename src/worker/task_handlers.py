@@ -218,17 +218,22 @@ def handle_enrich_field(task: dict) -> None:
     text       = task.get("text", "")
 
     from src.session.models import DocumentEnrichment, get_db
-    from src.rag.llm_client import get_llm
-    from src.rag.prompt_builder import PromptBuilder
-    from src.rag.insights_engine import InsightsEngine
-
-    builder = PromptBuilder()
-    llm = get_llm()
 
     try:
-        messages, system = builder.build_field_enrichment_messages(text[:3000], field)
-        raw = llm.complete_json(messages, system)
-        payload = InsightsEngine._parse_json(raw)
+        # IOC extraction uses regex, not LLM
+        if field == "iocs":
+            from src.api.endpoints import _extract_iocs
+            payload = {"iocs": _extract_iocs(text)}
+        else:
+            from src.rag.llm_client import get_llm
+            from src.rag.prompt_builder import PromptBuilder
+            from src.rag.insights_engine import InsightsEngine
+
+            builder = PromptBuilder()
+            llm = get_llm()
+            messages, system = builder.build_field_enrichment_messages(text[:3000], field)
+            raw = llm.complete_json(messages, system)
+            payload = InsightsEngine._parse_json(raw)
 
         if payload is None:
             raise ValueError(f"Failed to parse field enrichment JSON for {field}")

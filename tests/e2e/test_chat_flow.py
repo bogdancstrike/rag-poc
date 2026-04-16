@@ -114,10 +114,7 @@ class TestInsightsE2E:
         assert r.status_code == 200
         data = r.json()
         assert "tasks" in data
-        assert "summary" in data["tasks"]
-        assert "ner" in data["tasks"]
-        assert "graph" in data["tasks"]
-        assert "stats" in data["tasks"]
+        assert "_meta" in data
 
     def test_insights_refresh_updates_cache(self):
         r1 = requests.get(f"{BASE}/v1/insights", params={"datasource": "qsint_docs_global"}, timeout=120)

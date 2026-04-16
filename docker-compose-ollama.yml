@@ -1,0 +1,111 @@
+# docker-compose-ollama.yml — Ollama-based LLM backend (fallback / CPU-only alternative)
+#
+# Use this file instead of the SGLang service in docker-compose.yml when:
+#   - nvidia-container-toolkit is not available
+#   - You prefer Ollama's model management (pull by name, Modelfile tuning)
+#   - Running on CPU or a different GPU brand
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose-ollama.yml up -d
+#
+# Or with the deploy script:
+#   ./deploy.sh --ollama
+#
+# The Ollama server listens on the same OLLAMA_PORT (default 11434) and serves
+# the same OpenAI-compatible /v1 endpoint.  Update .env:
+#   LLM_BASE_URL=http://localhost:11434/v1
+#   LLM_MODEL=qwen2.5:3b-instruct    (Ollama model tag, not HuggingFace ID)
+
+networks:
+  ragnet:
+    external: true   # must already exist (created by docker-compose.yml)
+
+volumes:
+  ollama-data: {}
+
+services:
+
+  # ── Ollama server ────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: qsint-rag-ollama
+    networks: [ragnet]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_FLASH_ATTN=1
+      - OLLAMA_KV_CACHE_TYPE=q8_0
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b-instruct}
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── Model Puller — primary model ─────────────────────────────────────────────
+  ollama-pull-model:
+    image: ollama/ollama:latest
+    container_name: qsint-rag-ollama-puller
+    networks: [ragnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      - OLLAMA_HOST=ollama:11434
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b-instruct}
+    command: >
+      "echo 'Pulling $LLM_MODEL...' &&
+       ollama pull $LLM_MODEL &&
+       printf 'FROM %s\nPARAMETER num_ctx 32768\nPARAMETER num_predict 4096\nPARAMETER num_batch 1024\nPARAMETER kv_cache_type q4_0\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.2\n' \"$LLM_MODEL\" > /tmp/Modelfile &&
+       ollama create $LLM_MODEL -f /tmp/Modelfile &&
+       echo 'Primary model ready: ctx=32768 batch=1024 kv=q4_0'"
+
+  # ── Model Puller — phi4-mini ──────────────────────────────────────────────────
+  ollama-pull-phi4-mini:
+    image: ollama/ollama:latest
+    container_name: qsint-rag-ollama-puller-phi4
+    networks: [ragnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    command: >
+      "echo 'Pulling phi4-mini...' &&
+       ollama pull phi4-mini &&
+       printf 'FROM phi4-mini\nPARAMETER num_ctx 32768\nPARAMETER num_predict 4096\nPARAMETER num_batch 1024\nPARAMETER kv_cache_type q4_0\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.2\n' > /tmp/Modelfile_phi4 &&
+       ollama create phi4-mini -f /tmp/Modelfile_phi4 &&
+       echo 'phi4-mini ready'"
+
+  # ── Model Puller — gemma3:4b ──────────────────────────────────────────────────
+  ollama-pull-gemma3:
+    image: ollama/ollama:latest
+    container_name: qsint-rag-ollama-puller-gemma3
+    networks: [ragnet]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    command: >
+      "echo 'Pulling gemma3:4b...' &&
+       ollama pull gemma3:4b &&
+       printf 'FROM gemma3:4b\nPARAMETER num_ctx 32768\nPARAMETER num_predict 4096\nPARAMETER num_batch 1024\nPARAMETER kv_cache_type q4_0\nPARAMETER temperature 0.1\nPARAMETER top_p 0.9\nPARAMETER repeat_penalty 1.2\n' > /tmp/Modelfile_gemma3 &&
+       ollama create gemma3:4b -f /tmp/Modelfile_gemma3 &&
+       echo 'gemma3:4b ready'"

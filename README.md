@@ -83,7 +83,7 @@ flowchart TB
 | `postgres` | Relational storage — sessions, messages, task cache, labels, saved searches, investigations |
 | `elasticsearch` | High-performance document retrieval and aggregations |
 | `kafka` + `zookeeper` | Durable task queue — LLM tasks and fast (stats) tasks on separate topics |
-| `ollama` | GPU-accelerated LLM inference (OpenAI-compatible API) |
+| `sglang` | GPU-accelerated LLM inference (OpenAI-compatible API) — 2–3× faster than Ollama for Qwen |
 | `jaeger` | End-to-end distributed tracing via OTLP |
 | `redis` | Framework-level cache |
 | `kafka-ui` | Kafka topic browser (port `8090`) |
@@ -163,26 +163,50 @@ At startup the `LLMClient` queries the Ollama server to:
 
 ### Infrastructure Setup
 
+The easiest way is the deploy script — it handles everything in order:
+
 ```bash
 # Clone and configure
-cp .env.example .env   # or edit .env directly
+cp .env.example .env   # review and adjust settings
 
-# Start the full stack (Postgres, ES, Kafka, Ollama, Jaeger, Redis, etc.)
-docker-compose up -d
+# Full deploy (starts SGLang + infra + Python backend)
+chmod +x deploy.sh && ./deploy.sh
 
-# Watch model orchestration — pulls qwen2.5:3b-instruct and bakes 64k context
-docker compose logs -f ollama-pull-model
+# Or with a larger/quantized model:
+./deploy.sh --model Qwen/Qwen2.5-7B-Instruct-AWQ --context 65536
+
+# Use Ollama instead of SGLang (fallback, no code changes needed):
+./deploy.sh --ollama
+
+# Infrastructure only (no LLM):
+./deploy.sh --infra-only
 ```
 
-### Backend (local dev)
+`deploy.sh --help` lists all options. On first run SGLang will download the model from HuggingFace (~6 GB for 3B); subsequent starts use the Docker volume cache.
+
+**Manual startup** (without deploy.sh):
 
 ```bash
+# Start all infrastructure + SGLang
+docker compose up -d
+
+# Watch SGLang load the model (takes 1–3 min on first run)
+docker compose logs -f sglang
+
+# Start Python backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
 
 The API starts on `http://localhost:5100`. All endpoints live under `/rag/`.
+
+**Ollama fallback** (if you prefer Ollama):
+
+```bash
+# Edit .env: set LLM_BASE_URL=http://localhost:11434/v1 and LLM_MODEL=qwen2.5:3b-instruct
+docker compose -f docker-compose-ollama.yml up -d
+```
 
 ### Seed Data
 
@@ -882,42 +906,62 @@ Kafka Worker (enrich_doc):
 
 ## 7. Performance Tuning
 
-### GPU/VRAM Optimisation (RTX 3080 — 10 GB VRAM)
+### SGLang VRAM Configuration (RTX 3080 — 10 GB VRAM)
 
-The recommended Ollama configuration for a single 10 GB GPU:
+Key SGLang launch flags (set via `.env` or `deploy.sh`):
 
-```yaml
-# docker-compose.yml — ollama service
-environment:
-  - OLLAMA_NUM_PARALLEL=1      # 1 slot prevents KV-cache overflow
-  - OLLAMA_FLASH_ATTN=1        # Reduces VRAM by ~30%
-  - OLLAMA_KV_CACHE_TYPE=q8_0  # 8-bit KV quantisation (~1.2 GB at 64k context)
+```bash
+# .env
+LLM_MODEL=Qwen/Qwen2.5-3B-Instruct     # BF16, ~6 GB weights
+LLM_CONTEXT_LENGTH=32768               # max context per request
+SGLANG_MEM_FRACTION=0.85               # fraction of VRAM for static KV cache
+LLM_PARALLEL=10                        # max concurrent requests (SGLang batches these)
 ```
 
-With these settings:
-- Full 64k context window fits in VRAM (KV ≈ 1.2 GB for 3B model)
-- No RAM spillover → consistent 20–35 s per insight task
-- `OLLAMA_NUM_PARALLEL=1` is required; 3 parallel slots × 4.3 GB KV = 12.9 GB > 10 GB
+For lower VRAM usage, use the AWQ-quantized model (~2 GB weights instead of ~6 GB):
+
+```bash
+LLM_MODEL=Qwen/Qwen2.5-3B-Instruct-AWQ
+./deploy.sh --model Qwen/Qwen2.5-3B-Instruct-AWQ
+```
+
+**Why SGLang over Ollama**: SGLang's radix cache reuses the KV prefix across repeated insight
+tasks (all 8 share the same system prompt and document preamble), dramatically reducing
+prefill time on the 2nd–8th tasks. Ollama has no equivalent cache.
+
+### Ollama Fallback (if SGLang is unavailable)
+
+```yaml
+# docker-compose-ollama.yml — ollama service environment
+OLLAMA_NUM_PARALLEL=1      # 1 slot prevents KV-cache overflow on 10 GB
+OLLAMA_FLASH_ATTN=1        # Reduces VRAM by ~30%
+OLLAMA_KV_CACHE_TYPE=q8_0  # 8-bit KV quantisation
+```
+
+```bash
+./deploy.sh --ollama    # or: docker compose -f docker-compose-ollama.yml up -d
+# Edit .env: LLM_BASE_URL=http://localhost:11434/v1, LLM_MODEL=qwen2.5:3b-instruct
+```
 
 ### Input Token Budget
 
 `LLM_INSIGHTS_INPUT_MAX_TOKENS=8500` is the tested optimum:
 
-| Value | Docs packed | Pattern |
-|-------|------------|---------|
-| < 7 000 | ~8 docs | Bimodal 26s/52s — KV cache eviction alternates |
-| 8 500 (default) | ~14–20 docs | Consistent 20–35 s — prefix cache hits reliably |
-| > 16 000 | 40+ docs | JSON coherence degrades on 3B models |
+| Value | Docs packed | Pattern (Ollama) | Pattern (SGLang) |
+|-------|-------------|------------------|------------------|
+| < 7 000 | ~8 docs | Bimodal 26s/52s — KV eviction | < 5 s with radix cache |
+| 8 500 (default) | ~14–20 docs | Consistent 20–35 s | 5–15 s |
+| > 16 000 | 40+ docs | JSON coherence degrades on 3B | JSON coherence degrades on 3B |
 
 ### LLM Parallelism
 
 Set `LLM_PARALLEL` based on your GPU:
 
-| GPU | Recommended `LLM_PARALLEL` |
-|-----|---------------------------|
-| RTX 3080 (10 GB) | `1` (single slot) |
-| RTX 4090 (24 GB) | `3–5` |
-| Multi-GPU | `N × slots` |
+| GPU | SGLang `LLM_PARALLEL` | Ollama `LLM_PARALLEL` |
+|-----|-----------------------|-----------------------|
+| RTX 3080 (10 GB) | `10` (SGLang batches) | `1` (single KV slot) |
+| RTX 4090 (24 GB) | `20` | `3–5` |
+| Multi-GPU | higher | `N × slots` |
 
 ### Task Queue Routing
 

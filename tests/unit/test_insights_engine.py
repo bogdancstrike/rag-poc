@@ -28,7 +28,7 @@ class TestGetInsights:
                     with patch("src.worker.kafka_producer.publish_task") as mock_pub:
                         engine.get_insights("ds")
         mock_pub.assert_called_once_with(
-            {"task_type": "insight_coordinator", "datasource": "ds"}
+            {"task_type": "insight_coordinator", "datasource": "ds", "force": False}
         )
 
     def test_does_not_refresh_when_recently_updated(self, engine):

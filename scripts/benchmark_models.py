@@ -76,20 +76,20 @@ THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def list_models(base_url: str) -> list[str]:
-    tags_url = base_url.replace("/v1", "/api/tags")
-    resp = requests.get(tags_url, timeout=5)
+    """List available models via the standard OpenAI GET /v1/models endpoint."""
+    resp = requests.get(f"{base_url}/models", timeout=10)
     resp.raise_for_status()
-    return [m["name"] for m in resp.json().get("models", [])]
+    return [m["id"] for m in resp.json().get("data", [])]
 
 
 def get_model_ctx(base_url: str, model: str) -> int:
+    """Get context window for a model via GET /v1/models/{id} (SGLang exposes max_model_len)."""
     try:
-        url = base_url.replace("/v1", "/api/show")
-        resp = requests.post(url, json={"name": model}, timeout=5)
+        resp = requests.get(f"{base_url}/models/{model}", timeout=5)
         resp.raise_for_status()
-        mf = resp.json().get("modelfile", "")
-        m = re.search(r"num_ctx\s+(\d+)", mf)
-        return int(m.group(1)) if m else 4096
+        data = resp.json()
+        ctx = data.get("max_model_len") or data.get("context_window")
+        return int(ctx) if ctx else 4096
     except Exception:
         return 4096
 
@@ -358,7 +358,7 @@ def main():
         "relationship_network": raw_docs,
     }
 
-    client = OpenAI(base_url=args.llm, api_key="ollama", timeout=LLM_TIMEOUT)
+    client = OpenAI(base_url=args.llm, api_key="EMPTY", timeout=LLM_TIMEOUT)
 
     model_results: dict[str, dict] = {}
 
