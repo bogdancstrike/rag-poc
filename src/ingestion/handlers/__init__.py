@@ -92,4 +92,7 @@ from src.ingestion.handlers import (  # noqa: E402, F401
     json_handler,
     xlsx_handler,
     text_handler,
+    pdf_handler,
+    docx_handler,
+    html_handler,
 )

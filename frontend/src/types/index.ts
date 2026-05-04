@@ -121,14 +121,91 @@ export interface SavedSearch {
 export type InvestigationStatus = 'creating' | 'ready' | 'error'
 
 export interface Investigation {
-  id:          string
-  name:        string
-  description: string | null
-  index_name:  string
-  status:      InvestigationStatus
-  error_msg:   string | null
-  doc_count:   number | null
-  search_ids:  string[]
-  created_at:  string
-  updated_at:  string
+  id:           string
+  name:         string
+  description:  string | null
+  index_name:   string
+  status:       InvestigationStatus
+  error_msg:    string | null
+  doc_count:    number | null
+  upload_count?: number
+  search_ids:   string[]
+  created_at:   string
+  updated_at:   string
+}
+
+// ── File ingestion types ──────────────────────────────────────────────────────
+
+export type UploadStatus =
+  | 'pending'
+  | 'parsing'
+  | 'mapping_review'
+  | 'indexing'
+  | 'complete'
+  | 'error'
+
+export interface UploadMapping {
+  text?:        string | null
+  title?:       string | null
+  created_at?:  string | null
+  author?:      string | null
+  url?:         string | null
+  // text/log
+  mode?:        'regex' | 'paragraph' | 'line'
+  regex?:       string | null
+  min_chars?:   number
+}
+
+export interface ProposedMapping {
+  handler:     string
+  fingerprint: string | null
+  columns:     string[]
+  samples:     Record<string, unknown>[]
+  mapping:     UploadMapping
+  options:     Record<string, unknown>
+  confidence:  number
+  rationale:   string
+  source:      'llm' | 'heuristic'
+}
+
+export interface UploadedFile {
+  id:                string
+  investigation_id:  string
+  filename:          string
+  storage_uri:       string
+  size_bytes:        number
+  sha256:            string
+  mime_type:         string | null
+  handler_name:      string | null
+  profile_id:        string | null
+  status:            UploadStatus
+  error:             string | null
+  record_count:      number | null
+  indexed_count:     number | null
+  embedded_count:    number
+  vectors_ready:     boolean
+  proposed_mapping:  ProposedMapping | null
+  final_mapping:     UploadMapping | null
+  options:           Record<string, unknown>
+  created_at:        string
+  updated_at:        string
+}
+
+export interface ParserProfile {
+  id:           string
+  handler_name: string
+  fingerprint:  string
+  name:         string | null
+  mapping:      UploadMapping
+  options:      Record<string, unknown>
+  sample:       Record<string, unknown>[] | null
+  usage_count:  number
+  last_used_at: string | null
+  created_at:   string
+}
+
+export interface AcceptedFormats {
+  handlers: { name: string; extensions: string[]; mime_types: string[] }[]
+  /** Comma-joined list for the <input accept=""> attribute. */
+  accept_string: string
 }

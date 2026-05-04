@@ -97,13 +97,28 @@ def liveness(app, operation, request, **kwargs):
 
 
 def llm_stats_handler(app, operation, request, **kwargs):
-    """GET /v1/llm/stats — fetch detailed model info from Ollama."""
+    """GET /v1/llm/stats — fetch detailed model info from the inference server."""
     try:
         llm = get_llm()
         info = llm.get_model_info()
         return info, 200
     except Exception as e:
         logger.error(f"[api] Failed to fetch LLM stats: {e}")
+        return {"error": str(e)}, 500
+
+
+def llm_live_handler(app, operation, request, **kwargs):
+    """GET /v1/llm/live — live runtime metrics scraped from the inference server.
+
+    Returns request-queue depth, KV cache utilisation, prefix-cache hit rate,
+    cumulative token counts, and (for vLLM) derived KV-cache capacity. Used
+    by the Overview dashboard's live-stats card; polled every few seconds.
+    """
+    try:
+        llm = get_llm()
+        return llm.get_live_metrics(), 200
+    except Exception as e:
+        logger.error(f"[api] Failed to fetch LLM live metrics: {e}")
         return {"error": str(e)}, 500
 
 
@@ -1818,7 +1833,206 @@ def investigation_detail_handler(app, operation, request, investigation_id: str 
         except Exception as es_err:
             logger.warning(f"[api] ES index deletion failed for '{index_name}': {es_err}")
 
+        # Best-effort: drop the entire uploads tree for this investigation.
+        try:
+            from src.ingestion.storage import get_storage
+            get_storage().delete_for_investigation(iid)
+        except Exception as up_err:
+            logger.warning(f"[api] uploads purge failed for '{iid}': {up_err}")
+
         return {"status": "deleted", "id": iid, "index_name": index_name}, 200
     except Exception as e:
         logger.error(f"[api] investigation_detail_handler DELETE error: {e}")
+        return {"error": str(e)}, 500
+
+
+# ── File ingestion endpoints ──────────────────────────────────────────────────
+
+def investigation_uploads_handler(app, operation, request,
+                                  investigation_id: str = "", **kwargs):
+    """GET  /v1/investigations/<id>/uploads — list uploads for the investigation.
+    POST /v1/investigations/<id>/uploads — upload a new file (multipart).
+
+    The POST handler streams the request body to disk so multi-GB uploads
+    don't buffer in memory. The returned 202 includes the file row; the
+    actual parsing happens in a background ``ingest_file`` task.
+    """
+    iid = investigation_id or kwargs.get("investigation_id", "")
+    if not iid:
+        return {"error": "investigation_id is required"}, 400
+
+    method = flask_request.method
+
+    if method == "GET":
+        try:
+            from src.ingestion.service import list_uploads
+            return {"uploads": list_uploads(iid)}, 200
+        except Exception as e:
+            logger.error(f"[api] uploads list error: {e}", exc_info=True)
+            return {"error": str(e)}, 500
+
+    # POST — multipart upload
+    try:
+        from src.ingestion.service import create_upload, DuplicateUploadError
+        from src.ingestion.storage import FileTooLargeError
+
+        if "file" not in flask_request.files:
+            return {"error": "missing form field 'file'"}, 400
+        f = flask_request.files["file"]
+        filename = f.filename or "upload.bin"
+        mime = f.mimetype or None
+        try:
+            row = create_upload(iid, filename, f.stream, mime_type=mime)
+            return row, 202
+        except DuplicateUploadError as e:
+            return {"error": "duplicate upload — same file already exists",
+                    "existing_id": e.existing_id}, 409
+        except FileTooLargeError as e:
+            return {"error": str(e)}, 413
+    except Exception as e:
+        logger.error(f"[api] upload create error: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+
+
+def upload_detail_handler(app, operation, request, file_id: str = "", **kwargs):
+    """GET    /v1/uploads/<file_id> — get one upload (incl. proposed_mapping).
+    DELETE /v1/uploads/<file_id>?purge_es=true — remove upload row + file.
+    """
+    fid = file_id or kwargs.get("file_id", "")
+    if not fid:
+        return {"error": "file_id is required"}, 400
+    method = flask_request.method
+
+    if method == "GET":
+        try:
+            from src.ingestion.service import get_upload
+            rec = get_upload(fid)
+            if rec is None:
+                return {"error": "upload not found"}, 404
+            return rec, 200
+        except Exception as e:
+            logger.error(f"[api] upload get error: {e}", exc_info=True)
+            return {"error": str(e)}, 500
+
+    # DELETE
+    try:
+        from src.ingestion.service import delete_upload
+        purge = (flask_request.args.get("purge_es", "false").lower()
+                 in ("1", "true", "yes"))
+        ok = delete_upload(fid, purge_es=purge)
+        if not ok:
+            return {"error": "upload not found"}, 404
+        return {"status": "deleted", "id": fid, "purge_es": purge}, 200
+    except Exception as e:
+        logger.error(f"[api] upload delete error: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+
+
+def upload_confirm_handler(app, operation, request, file_id: str = "", **kwargs):
+    """POST /v1/uploads/<file_id>/confirm — apply user-edited mapping.
+
+    Body:
+      {"mapping": {...}, "options": {...}, "save_as_profile": bool, "name": "..."}
+    """
+    fid = file_id or kwargs.get("file_id", "")
+    if not fid:
+        return {"error": "file_id is required"}, 400
+    body = _json()
+    mapping = body.get("mapping") or {}
+    if not mapping or not mapping.get("text") and not mapping.get("mode"):
+        return {"error": "mapping must include 'text' (tabular) or 'mode' (text)"}, 400
+    try:
+        from src.ingestion.service import confirm_mapping
+        rec = confirm_mapping(
+            fid,
+            mapping=mapping,
+            options=body.get("options") or {},
+            save_as_profile=bool(body.get("save_as_profile", False)),
+            profile_name=body.get("name"),
+        )
+        if rec is None:
+            return {"error": "upload not found"}, 404
+        return rec, 202
+    except Exception as e:
+        logger.error(f"[api] upload confirm error: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+
+
+def upload_download_handler(app, operation, request, file_id: str = "", **kwargs):
+    """GET /v1/uploads/<file_id>/download — stream the original file back."""
+    fid = file_id or kwargs.get("file_id", "")
+    if not fid:
+        return {"error": "file_id is required"}, 400
+    try:
+        from src.ingestion.service import storage_path_for_download, get_upload
+        rec = get_upload(fid)
+        if rec is None:
+            return {"error": "upload not found"}, 404
+        path = storage_path_for_download(fid)
+        if path is None or not path.exists():
+            return {"error": "original file missing on disk"}, 410
+
+        def generate():
+            with path.open("rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        resp = Response(stream_with_context(generate()),
+                        mimetype=rec.get("mime_type") or "application/octet-stream")
+        # Quote the filename properly to handle commas/spaces.
+        resp.headers["Content-Disposition"] = (
+            f'attachment; filename="{rec["filename"]}"'
+        )
+        if rec.get("size_bytes"):
+            resp.headers["Content-Length"] = str(rec["size_bytes"])
+        return resp
+    except Exception as e:
+        logger.error(f"[api] upload download error: {e}", exc_info=True)
+        return {"error": str(e)}, 500
+
+
+def parser_profiles_handler(app, operation, request, **kwargs):
+    """GET /v1/parser-profiles?handler=<name> — list saved parser profiles."""
+    method = flask_request.method
+    if method == "GET":
+        try:
+            from src.ingestion import profiles as profiles_svc
+            handler = flask_request.args.get("handler") or None
+            return {"profiles": profiles_svc.list_profiles(handler)}, 200
+        except Exception as e:
+            logger.error(f"[api] profiles list error: {e}", exc_info=True)
+            return {"error": str(e)}, 500
+    return {"error": f"method {method} not allowed"}, 405
+
+
+def parser_profile_detail_handler(app, operation, request,
+                                  profile_id: str = "", **kwargs):
+    """DELETE /v1/parser-profiles/<id>"""
+    pid = profile_id or kwargs.get("profile_id", "")
+    if not pid:
+        return {"error": "profile_id is required"}, 400
+    method = flask_request.method
+    if method == "DELETE":
+        try:
+            from src.ingestion import profiles as profiles_svc
+            ok = profiles_svc.delete_profile(pid)
+            if not ok:
+                return {"error": "profile not found"}, 404
+            return {"status": "deleted", "id": pid}, 200
+        except Exception as e:
+            logger.error(f"[api] profile delete error: {e}", exc_info=True)
+            return {"error": str(e)}, 500
+    return {"error": f"method {method} not allowed"}, 405
+
+
+def upload_formats_handler(app, operation, request, **kwargs):
+    """GET /v1/uploads/formats — accepted formats list for the dropzone UI."""
+    try:
+        from src.ingestion.sniffer import accepted_formats
+        return accepted_formats(), 200
+    except Exception as e:
+        logger.error(f"[api] upload formats error: {e}", exc_info=True)
         return {"error": str(e)}, 500

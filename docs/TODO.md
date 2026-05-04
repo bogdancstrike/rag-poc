@@ -6,103 +6,89 @@ pipeline + tasks + API + wizard step (drag-drop, multi-file) + detail-page
 Uploads tab.
 
 ## In Progress
-- [x] Create docs/TODO.md tracker
+_(none)_
 
-## Pending — Backend
-
-- [ ] Add config + requirements
-      `UPLOADS_DIR`, `UPLOADS_MAX_SIZE_BYTES`, `INGEST_BATCH_SIZE`,
-      `INGEST_TEXT_TRUNCATE`, `INGEST_SAMPLE_RECORDS`,
-      `INGEST_ARCHIVE_*` (parked for Phase 3 but reserved).
-      `requirements.txt`: `openpyxl`, `charset-normalizer`.
-- [ ] `src/ingestion/storage.py` — `Storage` protocol + `LocalDiskStorage`.
-      Streaming write computes sha256 + size during write (single pass).
-- [ ] `src/ingestion/models.py` — `UploadedFile`, `ParserProfile`. Wire into
-      `src/core/db.py:init_db` so tables are created on startup.
-- [ ] `src/ingestion/handlers/base.py` — `RawRecord` dataclass +
-      `FileHandler` Protocol.
-- [ ] `src/ingestion/handlers/__init__.py` — registry: `register()`,
-      `get_for(path, mime, sniff_head)`, ordered by sniff confidence.
-- [ ] `src/ingestion/handlers/csv_handler.py` — csv, tsv. Auto-detect
-      delimiter + encoding. Streaming row iterator. Fingerprint = sorted
-      lowercased headers + delimiter.
-- [ ] `src/ingestion/handlers/json_handler.py` — json (top-level array) +
-      jsonl. Streaming `ijson`-style parse for arrays.
-- [ ] `src/ingestion/handlers/xlsx_handler.py` — openpyxl `read_only=True`
-      streaming, per-sheet.
-- [ ] `src/ingestion/handlers/text_handler.py` — txt, md, log. Pattern
-      inference (Telegram/syslog/Apache/generic), paragraph fallback.
-- [ ] `src/ingestion/sniffer.py` — content-based detection (extension
-      unreliable for leak files).
-- [ ] `src/ingestion/normalizer.py` — `RawRecord` → ES doc with the agreed
-      schema (text/title/created_at/source/raw/...).
-- [ ] `src/ingestion/profiles.py` — fingerprint compute + lookup/upsert.
-- [ ] `src/ingestion/llm_mapping.py` — single LLM call per file; reuses
-      `LLMClient.complete_json` retry pattern.
-- [ ] `src/ingestion/pipeline.py` — state machine
-      `pending → parsing → mapping_review → indexing → complete | error`.
-      Streaming + batched bulk-index (default `INGEST_BATCH_SIZE=500`).
-- [ ] `src/ingestion/tasks.py` — `@register("ingest_file")`,
-      `@register("ingest_continue")`. Routed to `fast_tasks` topic.
-- [ ] `src/ingestion/service.py` — `create_upload`, `get_upload`,
-      `list_uploads`, `confirm_mapping`, `delete_upload`,
-      `list_profiles`, `delete_profile`.
-- [ ] API: `POST /v1/investigations/<id>/uploads`,
-      `GET /v1/investigations/<id>/uploads`, `GET /v1/uploads/<id>`,
-      `POST /v1/uploads/<id>/confirm`, `DELETE /v1/uploads/<id>`,
-      `GET /v1/uploads/<id>/download`, `GET /v1/parser-profiles`,
-      `DELETE /v1/parser-profiles/<id>`.
-- [ ] `maps/endpoint.json` entries for the 8 routes above.
-- [ ] `main.py` — import `src.ingestion.tasks` for handler registration;
-      extend `_recover_dangling_tasks` for stuck uploads.
-
-## Pending — Frontend
-
-- [ ] `frontend/src/types/index.ts` — `UploadedFile`, `ParserProfile`,
-      `MappingProposal`.
-- [ ] `frontend/src/api/client.ts` — upload (multipart), list, detail,
-      confirm, delete, download.
-- [ ] `frontend/src/hooks/useUploads.ts` — React Query hooks.
-- [ ] `frontend/src/components/investigations/UploadFilesStep.tsx` —
-      wizard step with `Upload.Dragger` (multi-file drag-drop, antd).
-- [ ] `frontend/src/components/investigations/CreateInvestigationWizard.tsx`
-      — insert step between Scrapers and Enrichment; in `handleCreate`,
-      after the investigation is created, POST staged files in sequence.
-- [ ] `frontend/src/components/investigations/UploadsTab.tsx` — table,
-      dropzone, status badges, retry/delete actions.
-- [ ] `frontend/src/components/investigations/MappingReviewDrawer.tsx` —
-      shows proposed mapping, sample rows, save-as-profile checkbox.
-- [ ] `frontend/src/components/investigations/InvestigationDetail.tsx` —
-      add `Uploads` tab.
-
-## Pending — Wiring
-
-- [ ] Import `src.ingestion.tasks` at app startup so handlers register
-      with `tasking.registry`.
-- [ ] Add `ingest_file` / `ingest_continue` to producer's
-      `fast_tasks` routing list (default; no LLM lane needed —
-      mapping-inference is one short call).
-- [ ] Extend `_recover_dangling_tasks` to requeue uploads stuck in
-      `parsing` / `indexing` (file is on disk, replay is idempotent).
-
-## Pending — Tests
-
-- [ ] `tests/unit/test_ingestion_handlers.py` — parse each fixture in
-      `data/upload_examples/`; assert column detection.
-- [ ] `tests/unit/test_ingestion_profiles.py` — `leak_users_2024.csv`
-      and `leak_users_2025.csv` produce identical fingerprints.
-- [ ] `tests/unit/test_ingestion_normalizer.py` — RawRecord round-trip.
+## Pending
+_(none — Phase 1 + Phase 2 + tests + vLLM swap + live stats all complete)_
 
 ## Done
 - [x] Brainstorm + plan: `implementation_dynamic_upload_files.md`
 - [x] Example fixtures: `data/upload_examples/{csv,txt,jsonl,misc}/*`
 - [x] Tracker: `docs/TODO.md`
+- [x] Tests: 41 unit + 4 integration green (`tests/unit/test_ingestion_*.py`,
+      `tests/integration/test_ingestion_pipeline.py`); 205/205 total
+- [x] Tests: E2E suite written (`tests/e2e/test_uploads_flow.py`); auto-skips
+      until backend is up
+- [x] LLM: switch SGLang → vLLM in a standalone `docker-compose-llm.yml` so
+      it can run on a separate GPU host; main compose no longer includes a
+      GPU service. Updated `.env`, `Makefile`, and `CLAUDE.md`.
+- [x] LLM stats compatibility under vLLM: `get_model_info()` now derives
+      Architecture/Quantization/dtype/KV-Cache/VRAM from `cache_config_info`
+      + model name; cached-404 prevents repeated noise.
+- [x] Live LLM stats card on /overview: requests running/waiting, KV cache
+      utilisation, prefix-cache hit rate, lifetime token counters,
+      VRAM-per-request (theoretical + live modes; bytes-per-token derived
+      from the model's HF `config.json`).
+- [x] Phase 2 ingestion handlers: PDF (pypdf, page/paragraph chunking),
+      DOCX (python-docx, paragraph/section + heading-as-title), HTML
+      (BeautifulSoup, article/paragraph + canonical URL). Wired into the
+      registry; 12 new unit tests + new fixtures
+      (`docx_pdf/sample_brief.docx`, `docx_pdf/sample_intel.pdf`,
+      `html/sample_report.html`).
+- [x] Uniform DataTable rows: synthetic title fallback in normalizer
+      (first ~80 chars of text, else `filename #N`); flagged via
+      `title_synthetic` so the UI can dim them later if desired.
+- [x] Add config + requirements (`UPLOADS_DIR`, `UPLOADS_MAX_SIZE_BYTES`,
+      `INGEST_*`; deps `charset-normalizer`, `openpyxl`)
+- [x] `src/ingestion/storage.py` — Storage protocol + LocalDiskStorage
+      (streaming write, sha256 in single pass, size cap)
+- [x] `src/ingestion/models.py` — UploadedFile, ParserProfile (wired into
+      `core/db.py:init_db`)
+- [x] `src/ingestion/handlers/base.py` — RawRecord + FileHandler protocol
+- [x] `src/ingestion/handlers/__init__.py` — registry + `get_for()` dispatch
+- [x] `src/ingestion/handlers/csv_handler.py` — auto delimiter+encoding,
+      streaming row iterator, sorted-headers fingerprint
+- [x] `src/ingestion/handlers/json_handler.py` — jsonl + json (top-level
+      array streaming via brace-balanced parse for large files)
+- [x] `src/ingestion/handlers/xlsx_handler.py` — openpyxl `read_only=True`
+- [x] `src/ingestion/handlers/text_handler.py` — Telegram/Apache/syslog
+      pattern inference + paragraph/line fallback
+- [x] `src/ingestion/sniffer.py` — facade + accepted-formats listing
+- [x] `src/ingestion/normalizer.py` — RawRecord → ES doc + stable_doc_id
+- [x] `src/ingestion/profiles.py` — fingerprint lookup/upsert + mark_used
+- [x] `src/ingestion/llm_mapping.py` — single LLM call + heuristic fallback
+- [x] `src/ingestion/pipeline.py` — state machine
+      `pending → parsing → mapping_review → indexing → complete | error`
+- [x] `src/ingestion/tasks.py` — `@register("ingest_file")`,
+      `@register("ingest_continue")`
+- [x] `src/ingestion/service.py` — CRUD + lifecycle (incl.
+      `DuplicateUploadError`)
+- [x] API endpoints (8 routes) + `maps/endpoint.json` wiring
+- [x] Frontend types: `UploadedFile`, `ProposedMapping`, `ParserProfile`,
+      `AcceptedFormats`
+- [x] `frontend/src/api/uploads.ts` — multipart streaming upload + CRUD
+- [x] `frontend/src/hooks/useUploads.ts` — React Query hooks (poll while
+      non-terminal)
+- [x] `UploadFilesStep.tsx` — wizard drag-drop, multi-file, accepted
+      formats list
+- [x] `MappingReviewDrawer.tsx` — confirm proposed mapping; save-as-profile
+- [x] `UploadsTab.tsx` — drag-drop + table on the investigation detail page
+- [x] `CreateInvestigationWizard.tsx` — new step inserted between Scrapers
+      and Enrichment; sequential file upload after creation
+- [x] `InvestigationDetail.tsx` — Uploads tab added
+- [x] Wired `tasking.handlers.dispatch_task` to consult the registry as a
+      fallback (so `@register()` modules plug in without editing dispatch)
+- [x] `mark_task_error` extended for `ingest_file` / `ingest_continue`
+- [x] Investigation deletion now also purges the uploads tree
+- [x] `_recover_dangling_tasks` republishes stuck uploads
+- [x] `main.py` eager-imports `src.ingestion.tasks` at startup
+- [x] Frontend `tsc --noEmit` clean
 
-## Deferred (Phase 2+)
-- pdf, docx, html handlers
-- eml, mbox, archive handlers
-- OCR for scanned PDFs
-- Audio/video transcription
+## Deferred (Phase 3+)
+- eml, mbox, archive (zip/tar.gz) handlers
+- OCR for scanned PDFs (tesseract pipeline)
+- Audio/video transcription (Whisper)
 - Incremental embedding (`embed_docs` is currently all-or-nothing per index)
 - S3Storage backend
 - PII auto-redaction before LLM calls
+- Multi-sheet xlsx ingestion (currently first sheet only)

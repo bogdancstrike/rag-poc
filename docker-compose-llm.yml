@@ -1,0 +1,80 @@
+# docker-compose-llm.yml — Standalone vLLM serving stack.
+#
+# vLLM is the production-grade LLM server we deploy on the dedicated GPU box
+# (e.g. L40S 48GB at the office). The file is intentionally self-contained
+# with its own network so it can run:
+#
+#   1) Alongside the main app compose on the same host
+#         docker compose -f docker-compose-llm.yml up -d
+#         (and the app reaches it via the published port on localhost)
+#
+#   2) On a *separate* server — the deployment for the office L40S box.
+#         Bring this file up there, then point the app's .env at it:
+#         LLM_BASE_URL=http://<vllm-host>:8000/v1
+#
+# vLLM exposes an OpenAI-compatible HTTP API at /v1 (chat/completions, models,
+# embeddings if configured). Drop-in for the SGLang server we removed.
+#
+# GPU prerequisite: nvidia-container-toolkit installed on the host.
+
+networks:
+  llmnet:
+    name: qsint-rag-llmnet
+
+volumes:
+  vllm-models: {}
+
+services:
+
+  # ── vLLM (OpenAI-compatible LLM server) ─────────────────────────────────────
+  # Default model is Qwen3-4B-AWQ to match what the SGLang stack served. Swap
+  # via VLLM_MODEL in .env (e.g. Qwen2.5-14B-Instruct-AWQ on the L40S).
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: qsint-rag-vllm
+    networks: [llmnet]
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    volumes:
+      - vllm-models:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      # vLLM picks up these too — kept here so they appear in `env` for
+      # debuggability inside the container.
+      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen3-4B-AWQ}
+    # GPU passthrough — requires nvidia-container-toolkit on host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # ipc=host avoids vLLM's shared-memory complaints under default Docker.
+    ipc: host
+    # Tunables below are sized for an L40S (48 GB). For smaller cards lower
+    # --gpu-memory-utilization and shrink --max-model-len. The key flags:
+    #   --quantization awq_marlin    — fast AWQ kernel
+    #   --enforce-eager              — disable CUDA graphs while debugging
+    #                                  (remove for max throughput)
+    #   --enable-chunked-prefill     — better latency under concurrency
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen3-4B-AWQ}
+      --host 0.0.0.0
+      --port 8000
+      --quantization awq_marlin
+      --dtype half
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.90}
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-32768}
+      --max-num-seqs ${VLLM_MAX_NUM_SEQS:-16}
+      --enable-chunked-prefill
+      --kv-cache-dtype fp8_e5m2
+      --served-model-name ${VLLM_MODEL:-Qwen/Qwen3-4B-AWQ}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 180s
+    restart: unless-stopped

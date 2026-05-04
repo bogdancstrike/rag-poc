@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, String, Integer, Text, DateTime, JSON, BigInteger,
+    Column, String, Integer, Text, DateTime, JSON, BigInteger, Boolean,
     ForeignKey, UniqueConstraint, Index,
 )
 
@@ -45,6 +45,8 @@ class UploadedFile(Base):
     error            = Column(Text, nullable=True)
     record_count     = Column(Integer, nullable=True)      # records produced by extract()
     indexed_count    = Column(Integer, nullable=True)      # records actually bulk-indexed
+    embedded_count   = Column(Integer, nullable=False, default=0)
+    vectors_ready    = Column(Boolean, nullable=False, default=False)
     proposed_mapping = Column(JSON, nullable=True)         # LLM proposal awaiting confirm
     final_mapping    = Column(JSON, nullable=True)         # mapping actually used
     options          = Column(JSON, nullable=False, default=dict)  # delimiter, encoding, ...
@@ -75,6 +77,8 @@ class UploadedFile(Base):
             "error":            self.error,
             "record_count":     self.record_count,
             "indexed_count":    self.indexed_count,
+            "embedded_count":   self.embedded_count or 0,
+            "vectors_ready":    bool(self.vectors_ready),
             "proposed_mapping": self.proposed_mapping,
             "final_mapping":    self.final_mapping,
             "options":          self.options or {},

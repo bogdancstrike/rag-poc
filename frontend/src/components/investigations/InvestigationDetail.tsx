@@ -5,20 +5,22 @@ import {
 import {
   TableOutlined, BulbOutlined, MessageOutlined,
   ArrowLeftOutlined, LoadingOutlined, ThunderboltOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { useInvestigation } from '@/hooks/useInvestigations'
 import { DataTable } from '@/components/explore/DataTable'
 import { InsightsPanel } from '@/components/insights/InsightsPanel'
 import { ChatPanel } from '@/components/chat/ChatPanel'
+import { UploadsTab } from './UploadsTab'
 import { useSessionStore } from '@/stores/sessionStore'
 import { apiClient } from '@/api/client'
 import type { Investigation } from '@/types'
 
 const { Text, Title } = Typography
 
-type TabKey = 'data' | 'insights' | 'chat'
-const VALID_TABS: TabKey[] = ['data', 'insights', 'chat']
+type TabKey = 'data' | 'insights' | 'chat' | 'uploads'
+const VALID_TABS: TabKey[] = ['data', 'insights', 'chat', 'uploads']
 
 interface Props {
   id: string
@@ -293,6 +295,20 @@ export function InvestigationDetail({ id }: Props) {
             prefillQuery={activeTab === 'chat' ? pendingQuery : null}
             onPrefillConsumed={() => setPendingQuery(null)}
           />
+        </div>
+      ),
+    },
+    {
+      key: 'uploads',
+      label: (
+        <Space>
+          <CloudUploadOutlined />
+          Uploads
+        </Space>
+      ),
+      children: (
+        <div style={{ height: 'calc(100vh - 152px)', overflowY: 'auto' }}>
+          <UploadsTab investigationId={inv.id} />
         </div>
       ),
     },

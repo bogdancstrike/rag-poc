@@ -33,8 +33,16 @@ def dispatch_task(task: dict) -> None:
         elif ttype == "embed_docs":
             handle_embed_docs(task)
         else:
-            logger.warning(f"[worker] Unknown task_type: {ttype!r}")
-            return
+            # Fallback: any task type registered via @register() in
+            # ``tasking.registry`` (e.g. ingestion.tasks → ingest_file,
+            # ingest_continue). Lets new domains plug in without editing
+            # this dispatcher.
+            from src.tasking.registry import _HANDLERS  # noqa: PLC0415
+            handler = _HANDLERS.get(ttype)
+            if handler is None:
+                logger.warning(f"[worker] Unknown task_type: {ttype!r}")
+                return
+            handler(task)
         elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
         logger.info(f"[worker] ✓ done  task_type={ttype} ds={ds} elapsed={elapsed:.1f}s", "magenta")
     except Exception as e:
@@ -65,6 +73,17 @@ def mark_task_error(task: dict, error_msg: str) -> None:
                     row.status = "error"
                     row.error  = error_msg
                     db.commit()
+        elif ttype in ("ingest_file", "ingest_continue"):
+            from src.ingestion.models import UploadedFile
+            from src.core.db import get_db
+            file_id = task.get("file_id")
+            if file_id:
+                with get_db() as db:
+                    row = db.query(UploadedFile).filter_by(id=file_id).first()
+                    if row:
+                        row.status = "error"
+                        row.error  = error_msg
+                        db.commit()
     except Exception as e:
         logger.error(f"[worker] Failed to mark error in DB: {e}")
 

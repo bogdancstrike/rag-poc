@@ -20,7 +20,10 @@ def get_engine():
     global _engine
     if _engine is None:
         kwargs = {"pool_pre_ping": True}
-        kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_recycle": 300})
+        # Pool sizing only applies to real RDBMS pools; SQLite uses
+        # SingletonThreadPool which rejects these kwargs (test harness path).
+        if not Config.DATABASE_URL.startswith("sqlite"):
+            kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_recycle": 300})
         _engine = create_engine(Config.DATABASE_URL, **kwargs)
 
         @event.listens_for(_engine, "checkout")
@@ -100,6 +103,17 @@ def init_db():
             if "retry_count" not in de_cols:
                 _add_column_if_missing(conn, "rag_document_enrichment", "retry_count",
                                        "INTEGER NOT NULL DEFAULT 0")
+
+        # Phase-2 ingestion: per-file embedding columns. Older rag_uploaded_files
+        # tables (created before this feature shipped) miss these.
+        if "rag_uploaded_files" in inspector.get_table_names():
+            uf_cols = [c["name"] for c in inspector.get_columns("rag_uploaded_files")]
+            if "embedded_count" not in uf_cols:
+                _add_column_if_missing(conn, "rag_uploaded_files", "embedded_count",
+                                       "INTEGER NOT NULL DEFAULT 0")
+            if "vectors_ready" not in uf_cols:
+                _add_column_if_missing(conn, "rag_uploaded_files", "vectors_ready",
+                                       "BOOLEAN NOT NULL DEFAULT FALSE")
 
         conn.commit()
 

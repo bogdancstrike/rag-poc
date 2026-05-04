@@ -59,6 +59,35 @@ export const fetchLLMStats = async (): Promise<LLMStats> => {
   return data
 }
 
+export interface LLMLiveStats {
+  available:                   boolean
+  backend?:                    string
+  reason?:                     string
+  requests_running?:           number | null
+  requests_waiting?:           number | null
+  kv_cache_usage_perc?:        number | null    // 0..1
+  kv_cache_tokens_used?:       number | null
+  kv_cache_capacity_tokens?:   number | null
+  kv_cache_dtype?:             string | null
+  kv_cache_block_size?:        number | null
+  kv_cache_gpu_blocks?:        number | null
+  kv_total_bytes?:             number | null
+  kv_used_bytes?:              number | null
+  kv_bytes_per_token?:         number | null
+  vram_per_request_bytes?:     number | null
+  vram_per_request_basis?:     'actual' | 'theoretical' | null
+  gpu_memory_utilization?:     number | null    // 0..1
+  prompt_tokens_total?:        number | null
+  generation_tokens_total?:    number | null
+  prefix_cache_hit_rate?:      number | null    // 0..1
+  preemptions_total?:          number | null
+}
+
+export const fetchLLMLive = async (): Promise<LLMLiveStats> => {
+  const { data } = await apiClient.get<LLMLiveStats>('/v1/llm/live')
+  return data
+}
+
 /** Restart an insight or enrichment task. */
 export const restartTask = async (
   task_category: 'insight' | 'enrichment',

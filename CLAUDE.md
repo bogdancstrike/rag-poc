@@ -9,7 +9,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make install          # pip install requirements + local QF framework wheel
 make backend          # python main.py  (port 5100)
 make infra            # docker compose up -d postgres elasticsearch jaeger
-make up               # docker compose up -d  (all services)
+make up               # docker compose up -d  (postgres, ES, kafka, redis, jaeger, kibana, kafka-ui)
+make llm              # docker compose -f docker-compose-llm.yml up -d  (vLLM only)
+make llm-down         # bring vLLM down
+make llm-logs         # follow vLLM logs
 make seed-es          # seed 2000 synthetic OSINT docs into ES
 
 # Frontend
@@ -89,7 +92,7 @@ src/
 | PostgreSQL | 5432 | Sessions, messages, insights cache, enrichments, investigations |
 | Elasticsearch | 9200 | Document storage and retrieval (indices: `qsint_docs*`, `inv_*`) |
 | Kafka | 9094 | Task queue (topics: `qsint.rag.llm_tasks`, `qsint.rag.fast_tasks`) |
-| SGLang / Ollama | 30000 / 11434 | LLM inference (OpenAI-compat API) |
+| vLLM | 8000 | LLM inference (OpenAI-compat API). Started via `docker-compose-llm.yml`; can run on a dedicated GPU host. Configure via `LLM_BASE_URL` in `.env`. |
 | Jaeger | 4317 (OTLP) | Distributed tracing |
 | Redis | 6379 | Framework cache (not used by RAG logic) |
 

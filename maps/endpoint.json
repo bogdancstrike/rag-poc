@@ -352,6 +352,83 @@
     },
     {
       "namespace": "rag",
+      "operation_name": "v1_investigation_uploads",
+      "model_name": "Empty",
+      "request_method": ["GET", "POST"],
+      "api_url": "/v1/investigations/<investigation_id>/uploads",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "investigation_uploads_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_upload_formats",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/uploads/formats",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "upload_formats_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_upload_detail",
+      "model_name": "Empty",
+      "request_method": ["GET", "DELETE"],
+      "api_url": "/v1/uploads/<file_id>",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "upload_detail_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_upload_confirm",
+      "model_name": "Empty",
+      "request_method": ["POST"],
+      "api_url": "/v1/uploads/<file_id>/confirm",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "upload_confirm_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_upload_download",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/uploads/<file_id>/download",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "upload_download_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_parser_profiles",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/parser-profiles",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "parser_profiles_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_parser_profile_detail",
+      "model_name": "Empty",
+      "request_method": ["DELETE"],
+      "api_url": "/v1/parser-profiles/<profile_id>",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "parser_profile_detail_handler"
+      }
+    },
+    {
+      "namespace": "rag",
       "operation_name": "v1_llm_stats",
       "model_name": "Empty",
       "request_method": ["GET"],
@@ -359,6 +436,17 @@
       "exec_method": {
         "module_name": "api.endpoints",
         "method_name": "llm_stats_handler"
+      }
+    },
+    {
+      "namespace": "rag",
+      "operation_name": "v1_llm_live",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/llm/live",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "llm_live_handler"
       }
     },
     {

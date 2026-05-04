@@ -2,6 +2,7 @@ import { Card, Typography, Tag, Space, Button, Popconfirm, Tooltip } from 'antd'
 import {
   FolderOpenOutlined, DeleteOutlined, LoadingOutlined,
   CheckCircleOutlined, ExclamationCircleOutlined, FileTextOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons'
 import type { Investigation } from '@/types'
 
@@ -91,6 +92,14 @@ export function InvestigationCard({ investigation: inv, onOpen, onDelete }: Prop
             <FileTextOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />
             <Text type="secondary" style={{ fontSize: 11 }}>
               {inv.doc_count.toLocaleString()} documents
+            </Text>
+          </Space>
+        )}
+        {(inv.upload_count ?? 0) > 0 && (
+          <Space size={4}>
+            <CloudUploadOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {inv.upload_count} upload{inv.upload_count === 1 ? '' : 's'}
             </Text>
           </Space>
         )}

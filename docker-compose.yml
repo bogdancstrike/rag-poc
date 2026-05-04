@@ -4,10 +4,13 @@ networks:
 volumes:
   postgres-data: {}
   es-data: {}
-  sglang-models: {}
   redis-data: {}
   kafka-data: {}
   embed-cache: {}   # fastembed model cache (bge-large-en-v1.5, ~1 GB)
+
+# NOTE: The LLM (vLLM) is deployed in a separate compose file
+# ``docker-compose-llm.yml`` so it can run on a dedicated GPU host. The app
+# reaches it via ``LLM_BASE_URL`` in .env (default http://localhost:8000/v1).
 
 services:
 
@@ -56,51 +59,6 @@ services:
       timeout: 10s
       retries: 12
       start_period: 30s
-    restart: unless-stopped
-
-  # ── SGLang (Qwen local LLM — faster inference than Ollama) ────────────────
-  # Serves any HuggingFace model via an OpenAI-compatible API on port 30000.
-  # First start downloads the model (~6 GB for 3B); subsequent starts use cache.
-  # Set HF_TOKEN in .env if the model repo requires authentication.
-  sglang:
-    image: lmsysorg/sglang:latest
-    container_name: qsint-rag-sglang
-    networks: [ragnet]
-    ports:
-      - "${SGLANG_PORT:-30000}:30000"
-    volumes:
-      - sglang-models:/root/.cache/huggingface
-    environment:
-      - HF_TOKEN=${HF_TOKEN:-}
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
-    # GPU passthrough — requires nvidia-container-toolkit on host
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: >
-      python -m sglang.launch_server
-      --model-path Qwen/Qwen3-4B-AWQ
-      --host 0.0.0.0
-      --port 30000
-      --context-length 32768
-      --dtype half
-      --quantization marlin
-      --mem-fraction-static 0.75
-      --max-running-requests 10
-      --kv-cache-dtype fp8_e5m2
-      --reasoning-parser qwen3
-      --chunked-prefill-size 512
-      --disable-piecewise-cuda-graph
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:30000/health || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 120s
     restart: unless-stopped
 
   # ── Jaeger (OTLP tracing) ───────────────────────────────────────────────────

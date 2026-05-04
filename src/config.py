@@ -110,6 +110,13 @@ class Config:
     REDIS_CONNECT_TIMEOUT = os.getenv("REDIS_CONNECT_TIMEOUT", "5.0")
     REDIS_RETRY_ON_TIMEOUT= os.getenv("REDIS_RETRY_ON_TIMEOUT", "true")
 
+    # ── LLM serving runtime (vLLM-side knobs surfaced in the UI) ──────────────
+    # These shadow the values vLLM is launched with via docker-compose-llm.yml,
+    # so the backend can report concurrency limits etc. without scraping
+    # vLLM-internal HTTP endpoints that don't exist (vLLM has no
+    # /get_server_info — only /metrics + /v1/models).
+    VLLM_MAX_NUM_SEQS = int(os.getenv("VLLM_MAX_NUM_SEQS", "16"))
+
     # ── File ingestion (user-uploaded files into investigations) ──────────────
     # Root directory for original-file storage. Each upload lives at
     # ${UPLOADS_DIR}/<investigation_id>/<file_id>/{original.<ext>, meta.json}.

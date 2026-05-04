@@ -93,6 +93,15 @@ def _slugify(name: str) -> str:
 
 
 def list_investigations() -> list[dict]:
+    """List investigations + per-row upload count.
+
+    Two queries: one for the rows + their search-link join, one GROUP BY
+    aggregate over ``rag_uploaded_files`` keyed by investigation_id. We
+    avoid an N+1 by zipping the counts onto the rows after the second
+    query rather than firing a per-row count.
+    """
+    from sqlalchemy import func
+    from src.ingestion.models import UploadedFile
     with get_db() as db:
         rows = (
             db.query(Investigation)
@@ -100,10 +109,21 @@ def list_investigations() -> list[dict]:
             .order_by(Investigation.created_at.desc())
             .all()
         )
-        return [
-            r.to_dict(search_ids=[lnk.search_id for lnk in r.search_links])
-            for r in rows
-        ]
+        if not rows:
+            return []
+        ids = [r.id for r in rows]
+        counts_map = dict(
+            db.query(UploadedFile.investigation_id, func.count(UploadedFile.id))
+            .filter(UploadedFile.investigation_id.in_(ids))
+            .group_by(UploadedFile.investigation_id)
+            .all()
+        )
+        result = []
+        for r in rows:
+            d = r.to_dict(search_ids=[lnk.search_id for lnk in r.search_links])
+            d["upload_count"] = int(counts_map.get(r.id, 0))
+            result.append(d)
+        return result
 
 
 def create_investigation(
@@ -135,6 +155,8 @@ def create_investigation(
 
 
 def get_investigation(investigation_id: str) -> Optional[dict]:
+    from sqlalchemy import func
+    from src.ingestion.models import UploadedFile
     with get_db() as db:
         row = (
             db.query(Investigation)
@@ -144,7 +166,13 @@ def get_investigation(investigation_id: str) -> Optional[dict]:
         )
         if row is None:
             return None
-        return row.to_dict(search_ids=[lnk.search_id for lnk in row.search_links])
+        d = row.to_dict(search_ids=[lnk.search_id for lnk in row.search_links])
+        d["upload_count"] = int(
+            db.query(func.count(UploadedFile.id))
+            .filter(UploadedFile.investigation_id == investigation_id)
+            .scalar() or 0
+        )
+        return d
 
 
 def update_investigation_status(

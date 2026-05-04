@@ -6,10 +6,13 @@ import {
 import {
   PlusOutlined, SearchOutlined, ApiOutlined, ThunderboltOutlined,
   YoutubeOutlined, GlobalOutlined, QuestionCircleOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons'
 import type { SavedSearch } from '@/types'
 import { useSavedSearches } from '@/hooks/useSavedSearches'
 import { useCreateInvestigation } from '@/hooks/useInvestigations'
+import { uploadFile } from '@/api/uploads'
+import { UploadFilesStep } from './UploadFilesStep'
 import { apiClient } from '@/api/client'
 import dayjs from 'dayjs'
 
@@ -30,6 +33,7 @@ interface WizardState {
   description: string
   selectedSearchIds: string[]
   scrapers: ScraperConfig[]
+  uploadFiles: File[]
   autoEnrich: boolean
   autoEnrichCount: number
 }
@@ -39,11 +43,13 @@ const INITIAL: WizardState = {
   description: '',
   selectedSearchIds: [],
   scrapers: [],
+  uploadFiles: [],
   autoEnrich: false,
   autoEnrichCount: 20,
 }
 
-const TOTAL_STEPS = 5   // 0=Name · 1=Searches · 2=Scrapers · 3=Enrich · 4=Review
+// 0=Name · 1=Searches · 2=Scrapers · 3=Upload · 4=Enrich · 5=Review
+const TOTAL_STEPS = 6
 
 const PLATFORMS = [
   { key: 'youtube',  label: 'YouTube',   icon: <YoutubeOutlined style={{ color: '#FF0000' }} />,  placeholder: 'https://youtube.com/@channel or playlist URL' },
@@ -80,11 +86,11 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null)
   const [estimating, setEstimating]         = useState(false)
 
-  // When entering enrichment step (step 3), compute a document count estimate
+  // When entering enrichment step (step 4), compute a document count estimate
   // by querying each selected search's indices with its query string.
   useEffect(() => {
-    if (step !== 3 || state.selectedSearchIds.length === 0) {
-      if (step === 3 && state.selectedSearchIds.length === 0) setEstimatedTotal(0)
+    if (step !== 4 || state.selectedSearchIds.length === 0) {
+      if (step === 4 && state.selectedSearchIds.length === 0) setEstimatedTotal(0)
       return
     }
     setEstimating(true)
@@ -169,7 +175,13 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
     }
 
     if (step === 3) {
+      // Upload step — files already in state.uploadFiles
       setStep(4)
+      return
+    }
+
+    if (step === 4) {
+      setStep(5)
       return
     }
   }
@@ -184,11 +196,27 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
         search_ids:  state.selectedSearchIds,
       },
       {
-        onSuccess: (inv) => {
+        onSuccess: async (inv) => {
           const enrichCount = state.autoEnrich ? state.autoEnrichCount : 0
+          // Fire-and-forget: ship every staged file to the new investigation.
+          // Sequential to avoid overwhelming the server on multi-GB uploads;
+          // each file's parse/index runs on the backend in the background
+          // anyway, so the UX impact of serial uploads is minimal.
+          const filesToUpload = state.uploadFiles
+          const invId = inv.id
           reset()
           onClose()
-          onCreated(inv.id, enrichCount)
+          onCreated(invId, enrichCount)
+          for (const file of filesToUpload) {
+            try {
+              await uploadFile(invId, file)
+            } catch (e) {
+              // Per-file failures are surfaced on the Uploads tab; we don't
+              // block the wizard close on them.
+              // eslint-disable-next-line no-console
+              console.warn(`[wizard] upload failed for ${file.name}:`, e)
+            }
+          }
         },
         onError: (err: any) => {
           // message imported by antd static method
@@ -373,8 +401,15 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
       </Space>
     </div>,
 
-    // ── Step 3: Auto-enrichment ───────────────────────────────────────────────
-    <div key="step3">
+    // ── Step 3: Upload Files ─────────────────────────────────────────────────
+    <UploadFilesStep
+      key="step3"
+      files={state.uploadFiles}
+      onChange={(fs) => setState((s) => ({ ...s, uploadFiles: fs }))}
+    />,
+
+    // ── Step 4: Auto-enrichment ───────────────────────────────────────────────
+    <div key="step4">
       <Text type="secondary" style={{ display: 'block', marginBottom: 16, fontSize: 12 }}>
         Automatically enrich documents with AI analysis (entities, sentiment, IOCs, timelines,
         relationship graphs) once the investigation index is ready.
@@ -460,8 +495,8 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
       </Space>
     </div>,
 
-    // ── Step 4: Review ────────────────────────────────────────────────────────
-    <div key="step4">
+    // ── Step 5: Review ────────────────────────────────────────────────────────
+    <div key="step5">
       <Space orientation="vertical"
  style={{ width: '100%' }} size={14}>
         {/* Name + description */}
@@ -516,6 +551,30 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
                     </Tag>
                   )
                 })}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Uploaded files */}
+        {state.uploadFiles.length > 0 && (
+          <>
+            <Divider style={{ margin: '4px 0' }} />
+            <div>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                FILE UPLOADS ({state.uploadFiles.length})
+              </Text>
+              <div style={{ marginTop: 4 }}>
+                {state.uploadFiles.slice(0, 8).map((f, i) => (
+                  <Tag key={i} style={{ marginTop: 4, fontSize: 11 }}>
+                    {f.name}
+                  </Tag>
+                ))}
+                {state.uploadFiles.length > 8 && (
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {' '}+ {state.uploadFiles.length - 8} more
+                  </Text>
+                )}
               </div>
             </div>
           </>
@@ -585,7 +644,8 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
         items={[
           { title: 'Name' },
           { title: 'Searches' },
-          { title: 'Scrapers', icon: <ApiOutlined /> },
+          { title: 'Scrapers',   icon: <ApiOutlined /> },
+          { title: 'Upload',     icon: <CloudUploadOutlined /> },
           { title: 'Enrichment', icon: <ThunderboltOutlined /> },
           { title: 'Review' },
         ]}

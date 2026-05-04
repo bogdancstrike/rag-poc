@@ -93,6 +93,53 @@ def _recover_dangling_tasks() -> None:
             pending_enrich = [(r.doc_id, r.datasource)
                               for r in db.query(DocumentEnrichment).filter_by(status="pending").all()]
 
+        # ── Uploads: parsing/indexing → republish ─────────────────────────
+        # The original file is on disk and ES upserts on stable _id, so
+        # replaying ingest_file (parsing) or ingest_continue (indexing) is
+        # safe and idempotent.
+        try:
+            from src.ingestion.models import UploadedFile
+            with get_db() as db:
+                stuck_uploads = db.query(UploadedFile).filter(
+                    UploadedFile.status.in_(["parsing", "indexing"])
+                ).all()
+                upload_replays = [(u.id, u.investigation_id, u.status) for u in stuck_uploads]
+                # Reset to a clean state — parsing rows go back to pending so
+                # run_parse can re-pick a handler; indexing rows stay so
+                # run_index can resume from indexed_count.
+                for u in stuck_uploads:
+                    if u.status == "parsing":
+                        u.status = "pending"
+                if stuck_uploads:
+                    db.commit()
+            for fid, ds, prev_status in upload_replays:
+                ttype = "ingest_continue" if prev_status == "indexing" else "ingest_file"
+                publish_task({
+                    "task_type": ttype, "file_id": fid,
+                    "investigation_id": ds, "datasource": ds,
+                })
+            if upload_replays:
+                logger.info(f"[QSINT-RAG] Requeued {len(upload_replays)} upload task(s)")
+
+            # Files that finished indexing but never finished embedding —
+            # republish embed_file so their hybrid status converges.
+            with get_db() as db:
+                stale_embed = db.query(UploadedFile).filter(
+                    UploadedFile.status == "complete",
+                    UploadedFile.vectors_ready.is_(False),
+                    UploadedFile.indexed_count > 0,
+                ).all()
+                embed_replays = [(u.id, u.investigation_id) for u in stale_embed]
+            for fid, ds in embed_replays:
+                publish_task({
+                    "task_type": "embed_file", "file_id": fid,
+                    "investigation_id": ds, "datasource": ds,
+                })
+            if embed_replays:
+                logger.info(f"[QSINT-RAG] Requeued {len(embed_replays)} embed_file task(s)")
+        except Exception as up_err:
+            logger.warning(f"[QSINT-RAG] Upload recovery failed: {up_err}")
+
         if pending_enrich:
             from src.datasource.es_client import ESClient
             client = ESClient()
@@ -146,6 +193,14 @@ def main():
 
     # Recover tasks that were interrupted mid-processing by a previous crash/restart.
     _recover_dangling_tasks()
+
+    # Eager-import ingestion task handlers so they register via @register()
+    # before the consumer starts pulling messages.
+    try:
+        import src.ingestion.tasks  # noqa: F401
+        logger.info("[QSINT-RAG] Ingestion task handlers registered")
+    except Exception as e:
+        logger.warning(f"[QSINT-RAG] Ingestion task handler import failed: {e}")
 
     # Start Kafka consumer worker
     from src.worker.kafka_consumer import start_consumer

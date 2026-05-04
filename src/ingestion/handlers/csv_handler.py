@@ -36,8 +36,29 @@ def _detect_encoding(head: bytes) -> str:
 
 
 def _detect_delimiter(sample: str) -> str:
-    """csv.Sniffer occasionally gets confused by quoted commas inside fields;
-    fall back to plain comma when it can't make up its mind."""
+    """Auto-detect the column separator.
+
+    csv.Sniffer's character-frequency heuristic mis-detects when the body
+    contains many quoted commas inside `;`-delimited fields. To make this
+    robust, we first examine the *header line* — by convention it has no
+    quoted content — and pick the candidate delimiter that produces the
+    most columns there. Sniffer is the fallback.
+    """
+    candidates = (",", ";", "\t", "|")
+    first_line = sample.split("\n", 1)[0]
+    if first_line:
+        counts = {d: first_line.count(d) for d in candidates}
+        best = max(counts, key=lambda d: counts[d])
+        if counts[best] >= 1:
+            # Validate: at least 50% of the next 10 lines should have the
+            # same column count under this delimiter. Otherwise fall through
+            # to Sniffer.
+            lines = sample.split("\n")[1:11]
+            if lines:
+                expected = first_line.count(best) + 1
+                ok = sum(1 for ln in lines if ln.strip() and ln.count(best) + 1 == expected)
+                if ok / max(1, sum(1 for ln in lines if ln.strip())) >= 0.5:
+                    return best
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
         return dialect.delimiter

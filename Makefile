@@ -1,4 +1,4 @@
-.PHONY: infra up down logs backend frontend test test-unit test-integration lint pull-model
+.PHONY: infra up down logs llm llm-up llm-down llm-logs backend frontend test test-unit test-integration test-e2e lint pull-model
 
 # ── Infrastructure ───────────────────────────────────────────────────────────
 infra:
@@ -13,9 +13,19 @@ down:
 logs:
 	docker compose logs -f
 
-# Pull Ollama model (run after Ollama container is up)
+# ── LLM (vLLM) — separate compose so it can run on a dedicated GPU host ─────
+llm-up llm:
+	docker compose -f docker-compose-llm.yml up -d
+
+llm-down:
+	docker compose -f docker-compose-llm.yml down
+
+llm-logs:
+	docker compose -f docker-compose-llm.yml logs -f vllm
+
+# Pull Ollama model (run after Ollama container is up — legacy path)
 pull-model:
-	docker compose exec ollama ollama pull qwen2.5:3b-instruct
+	docker compose -f docker-compose-ollama.yml exec ollama ollama pull qwen2.5:3b-instruct
 
 # ── Backend (local dev) ───────────────────────────────────────────────────────
 install:

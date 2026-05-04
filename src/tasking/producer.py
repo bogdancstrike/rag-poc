@@ -56,8 +56,11 @@ def publish_task(task: dict) -> bool:
     task = dict(task)
     task.setdefault("created_at", datetime.now(timezone.utc).isoformat())
 
-    # Route fast vs LLM tasks to separate topics
-    llm_types = {"insight_ai", "enrich_doc", "enrich_field", "embed_docs"}
+    # Route fast vs LLM tasks to separate topics. ``embed_file`` rides the
+    # LLM lane because it's CPU-heavy (fastembed) and benefits from the
+    # same concurrency cap as the LLM tasks — running 10 file embeddings
+    # in parallel just thrashes the CPU.
+    llm_types = {"insight_ai", "enrich_doc", "enrich_field", "embed_docs", "embed_file"}
     topic = (
         Config.KAFKA_TOPIC_LLM_TASKS
         if task.get("task_type") in llm_types
