@@ -937,6 +937,11 @@ export function DataTable({
 
   const { data, isLoading, error } = useDocuments(datasource, page, pageSize, query, filters)
 
+  useEffect(() => {
+    setSearchVal(query)
+    setPage(1)
+  }, [query])
+
   // In global-explore mode (datasource="") documents span multiple indices.
   // Collect unique _source_index values from the loaded page so we can fetch
   // enriched IDs for each index separately (same cache keys as per-index mode).

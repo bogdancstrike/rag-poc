@@ -92,6 +92,12 @@ export function InvestigationDetail({ id }: Props) {
   const [pendingQuery, setPendingQuery] = useState<string | null>(null)
   const { pendingQuery: storePending, setPendingQuery: setStorePending } = useSessionStore()
 
+  useEffect(() => {
+    const t = searchParams.get('tab') as TabKey | null
+    const nextTab = t && VALID_TABS.includes(t) ? t : 'data'
+    setActiveTab(nextTab)
+  }, [searchParams])
+
   // Auto-enrichment: read count from router state set by the wizard
   const autoEnrichCount: number = (location.state as any)?.autoEnrichCount ?? 0
   const enrichTriggeredRef = useRef(false)
