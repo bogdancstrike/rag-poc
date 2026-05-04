@@ -1,6 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Typography, Tag, Space, theme, Button, Tooltip, Collapse, Avatar } from 'antd'
-import { LinkOutlined, CalendarOutlined, RobotOutlined, UserOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import {
+  LinkOutlined, CalendarOutlined, RobotOutlined, UserOutlined,
+  InfoCircleOutlined, BulbOutlined,
+  CaretRightOutlined, CaretDownOutlined,
+} from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useNavigate } from 'react-router-dom'
@@ -9,6 +13,125 @@ import { ClassificationTag, SentimentTag } from '../common/IntelligenceTags'
 import { RelevanceBar } from '../common/RelevanceBar'
 
 const { Text } = Typography
+
+/**
+ * Split a streamed assistant message into "thinking" (reasoning model
+ * <think>...</think> blocks) and the actual answer that follows.
+ *
+ * Handles partially-streamed content too: an unclosed <think> at the end
+ * of the buffer means the model is still mid-reasoning, so we mark
+ * ``thinkingInProgress`` so the UI can render a live "Thinking…" spinner.
+ */
+function splitThinkBlocks(content: string): {
+  thoughts: string[]
+  answer: string
+  thinkingInProgress: boolean
+} {
+  const thoughts: string[] = []
+  let answer = ''
+  let cursor = 0
+  let thinkingInProgress = false
+
+  const re = /<think>([\s\S]*?)(?:<\/think>|$)/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(content)) !== null) {
+    answer += content.slice(cursor, m.index)
+    const closed = content.slice(m.index + m[0].length - '</think>'.length).startsWith('</think>')
+                || /<\/think>/i.test(m[0])
+    if (closed) {
+      thoughts.push(m[1].trim())
+    } else {
+      // Unclosed — currently streaming the reasoning text. Still surface it
+      // so the user sees something happening.
+      thoughts.push(m[1].trim())
+      thinkingInProgress = true
+    }
+    cursor = m.index + m[0].length
+    if (!closed) break
+  }
+  answer += content.slice(cursor)
+  return { thoughts, answer: answer.trim(), thinkingInProgress }
+}
+
+/**
+ * Collapsible "reasoning" display, dimmed and italicised so it reads as
+ * subordinate to the actual answer (mirrors the way Claude/ChatGPT show
+ * model thinking).
+ */
+function ThinkBlock({
+  thoughts, streaming,
+}: {
+  thoughts: string[]
+  streaming: boolean
+}) {
+  const { token } = theme.useToken()
+  const [open, setOpen] = useState(false)
+
+  if (thoughts.length === 0) return null
+  const merged = thoughts.join('\n\n').trim()
+  if (!merged) return null
+
+  return (
+    <div
+      style={{
+        marginBottom: 8,
+        border: `1px dashed ${token.colorBorderSecondary}`,
+        borderRadius: token.borderRadius,
+        background: token.colorFillAlter,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          all: 'unset',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 10px',
+          width: '100%',
+          color: token.colorTextSecondary,
+          fontSize: 12,
+        }}
+      >
+        {open
+          ? <CaretDownOutlined style={{ fontSize: 10 }} />
+          : <CaretRightOutlined style={{ fontSize: 10 }} />}
+        <BulbOutlined style={{ fontSize: 11 }} />
+        <Text style={{ fontSize: 12, color: token.colorTextSecondary }}>
+          {streaming ? 'Thinking…' : 'Reasoning'}
+        </Text>
+        {streaming && (
+          <span
+            style={{
+              display: 'inline-block', width: 6, height: 6,
+              borderRadius: '50%', background: token.colorPrimary,
+              animation: 'blink 1s step-end infinite', marginLeft: 2,
+            }}
+          />
+        )}
+      </button>
+      {open && (
+        <div
+          style={{
+            padding: '8px 12px 10px 12px',
+            borderTop: `1px dashed ${token.colorBorderSecondary}`,
+            color: token.colorTextSecondary,
+            fontSize: 12,
+            fontStyle: 'italic',
+            lineHeight: 1.55,
+            whiteSpace: 'pre-wrap',
+            maxHeight: 280,
+            overflowY: 'auto',
+          }}
+        >
+          {merged}
+        </div>
+      )}
+    </div>
+  )
+}
 
 interface Props {
   message: Message & { streaming?: boolean }
@@ -272,24 +395,41 @@ export function MessageBubble({ message }: Props) {
               {message.content}
             </Text>
           ) : (
-            <div style={{ position: 'relative' }}>
-              <CitedContent content={message.content} sources={sources} />
-              {message.streaming && (
-                <span
-                  style={{
-                    display:     'inline-block',
-                    width:       8,
-                    height:      15,
-                    background:  token.colorPrimary,
-                    borderRadius: 2,
-                    animation:   'blink 1s step-end infinite',
-                    verticalAlign: 'middle',
-                    marginLeft: 4,
-                    opacity: 0.7
-                  }}
-                />
-              )}
-            </div>
+            (() => {
+              // Reasoning models (Qwen3, etc.) emit <think>...</think> before
+              // the answer. We surface those as a separate collapsible
+              // "Reasoning" block so the answer body stays clean.
+              const { thoughts, answer, thinkingInProgress } =
+                splitThinkBlocks(message.content)
+              return (
+                <div style={{ position: 'relative' }}>
+                  {thoughts.length > 0 && (
+                    <ThinkBlock
+                      thoughts={thoughts}
+                      streaming={!!message.streaming && thinkingInProgress}
+                    />
+                  )}
+                  {answer && (
+                    <CitedContent content={answer} sources={sources} />
+                  )}
+                  {message.streaming && (
+                    <span
+                      style={{
+                        display:     'inline-block',
+                        width:       8,
+                        height:      15,
+                        background:  token.colorPrimary,
+                        borderRadius: 2,
+                        animation:   'blink 1s step-end infinite',
+                        verticalAlign: 'middle',
+                        marginLeft: 4,
+                        opacity: 0.7
+                      }}
+                    />
+                  )}
+                </div>
+              )
+            })()
           )}
         </div>
 

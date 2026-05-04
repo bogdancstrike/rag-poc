@@ -39,9 +39,12 @@ class PdfHandler:
     # ── Options ─────────────────────────────────────────────────────────────
 
     def _resolve_options(self, path: Path, options: dict) -> dict:
+        # min_chars=0 by default → no silent drops. Image-only pages still
+        # produce empty extracts and skip *organically* via the
+        # ``not text`` early-return in ``_iter_records``.
         opts = dict(options or {})
         opts.setdefault("chunking", "page")     # "page" | "paragraph"
-        opts.setdefault("min_chars", 20)
+        opts.setdefault("min_chars", 0)
         return opts
 
     # ── Fingerprint ─────────────────────────────────────────────────────────

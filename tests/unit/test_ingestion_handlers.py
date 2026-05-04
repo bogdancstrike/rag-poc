@@ -193,3 +193,33 @@ class TestXlsxHandler:
         records = list(handler.extract(path, proposal.suggested_mapping, proposal.options))
         assert len(records) == 2
         assert records[0].title == "First entry"
+
+    def test_xlsx_multi_sheet_ingests_every_sheet(self, handler, tmp_path):
+        """Two-sheet workbook → every row from every sheet must come out
+        (no silent data loss)."""
+        from openpyxl import Workbook
+        path = tmp_path / "multi.xlsx"
+        wb = Workbook()
+        ws1 = wb.active
+        ws1.title = "Alpha"
+        ws1.append(["id", "body"])
+        ws1.append([1, "alpha row 1"])
+        ws1.append([2, "alpha row 2"])
+        ws2 = wb.create_sheet("Beta")
+        ws2.append(["id", "body"])
+        ws2.append([10, "beta row 1"])
+        ws2.append([20, "beta row 2"])
+        ws2.append([30, "beta row 3"])
+        wb.save(path)
+        wb.close()
+
+        records = list(handler.extract(
+            path, {"text": "body"}, {"has_header": True},
+        ))
+        # 2 + 3 = 5 records across both sheets
+        assert len(records) == 5
+        sheets = {r.raw.get("__sheet") for r in records}
+        assert sheets == {"Alpha", "Beta"}
+        # record_index is contiguous (no collisions between sheets)
+        indices = [r.record_index for r in records]
+        assert indices == [0, 1, 2, 3, 4]

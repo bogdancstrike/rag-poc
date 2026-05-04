@@ -49,7 +49,9 @@ class DocxHandler:
         # for retrieval). "section" groups paragraphs under each heading
         # into a single record (better for short docs).
         opts.setdefault("chunking", "paragraph")
-        opts.setdefault("min_chars", 20)
+        # Default 0 → no silent drops. Empty paragraphs are still skipped
+        # because they carry no information after strip().
+        opts.setdefault("min_chars", 0)
         return opts
 
     # ── Fingerprint ─────────────────────────────────────────────────────────

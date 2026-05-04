@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Modal, Steps, Form, Input, Button, Space, Typography, Table, Tag,
-  Alert, Switch, InputNumber, DatePicker, theme, Divider, Spin,
+  Alert, Switch, InputNumber, DatePicker, theme, Divider, Spin, Progress,
 } from 'antd'
 import {
   PlusOutlined, SearchOutlined, ApiOutlined, ThunderboltOutlined,
@@ -85,6 +85,20 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
   // Estimated total document count for the enrichment step
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null)
   const [estimating, setEstimating]         = useState(false)
+
+  // Per-file upload progress, shown on a dedicated "uploading" view that
+  // takes over the wizard between createInvestigation succeeding and the
+  // final close. Each entry is `pending | uploading | done | error` plus
+  // an optional bytes-loaded for the in-flight one.
+  type UploadEntry = {
+    file:    File
+    state:   'pending' | 'uploading' | 'done' | 'error'
+    loaded:  number          // bytes uploaded (only meaningful while uploading)
+    error?:  string
+  }
+  const [uploadProgress, setUploadProgress]   = useState<UploadEntry[] | null>(null)
+  const [createdInvId, setCreatedInvId]       = useState<string | null>(null)
+  const [pendingEnrichCnt, setPendingEnrich]  = useState(0)
 
   // When entering enrichment step (step 4), compute a document count estimate
   // by querying each selected search's indices with its query string.
@@ -188,6 +202,19 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
 
   const handleBack = () => setStep((s) => Math.max(0, s - 1))
 
+  /**
+   * Two-phase create:
+   *   1. POST the investigation (createInv.mutate) and wait for 202.
+   *   2. If files were staged, *keep the wizard open* on a dedicated
+   *      progress view and ship each file sequentially with live byte-
+   *      progress. Once every file finishes (or errors), call onCreated
+   *      and close.
+   *
+   * Sequential uploads matter for multi-GB files — the server streams
+   * directly to disk, but parallel uploads from the browser would saturate
+   * the connection without giving any speedup, while the progress
+   * indicator stays comprehensible.
+   */
   const handleCreate = () => {
     createInv.mutate(
       {
@@ -198,23 +225,56 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
       {
         onSuccess: async (inv) => {
           const enrichCount = state.autoEnrich ? state.autoEnrichCount : 0
-          // Fire-and-forget: ship every staged file to the new investigation.
-          // Sequential to avoid overwhelming the server on multi-GB uploads;
-          // each file's parse/index runs on the backend in the background
-          // anyway, so the UX impact of serial uploads is minimal.
           const filesToUpload = state.uploadFiles
           const invId = inv.id
-          reset()
-          onClose()
-          onCreated(invId, enrichCount)
-          for (const file of filesToUpload) {
+
+          // No files staged → behave like before: close + notify parent.
+          if (filesToUpload.length === 0) {
+            reset()
+            onClose()
+            onCreated(invId, enrichCount)
+            return
+          }
+
+          // Files staged → switch the wizard to the "Uploading…" view.
+          setCreatedInvId(invId)
+          setPendingEnrich(enrichCount)
+          setUploadProgress(filesToUpload.map((f) => ({
+            file: f, state: 'pending', loaded: 0,
+          })))
+
+          // Run sequentially so the progress bar stays meaningful and
+          // the server isn't competing for disk IO across N streams.
+          for (let i = 0; i < filesToUpload.length; i++) {
+            const file = filesToUpload[i]
+            setUploadProgress((cur) => {
+              if (!cur) return cur
+              const next = cur.slice()
+              next[i] = { ...next[i], state: 'uploading', loaded: 0 }
+              return next
+            })
             try {
-              await uploadFile(invId, file)
-            } catch (e) {
-              // Per-file failures are surfaced on the Uploads tab; we don't
-              // block the wizard close on them.
-              // eslint-disable-next-line no-console
-              console.warn(`[wizard] upload failed for ${file.name}:`, e)
+              await uploadFile(invId, file, (loaded) => {
+                setUploadProgress((cur) => {
+                  if (!cur) return cur
+                  const next = cur.slice()
+                  next[i] = { ...next[i], loaded }
+                  return next
+                })
+              })
+              setUploadProgress((cur) => {
+                if (!cur) return cur
+                const next = cur.slice()
+                next[i] = { ...next[i], state: 'done' }
+                return next
+              })
+            } catch (e: any) {
+              setUploadProgress((cur) => {
+                if (!cur) return cur
+                const next = cur.slice()
+                next[i] = { ...next[i], state: 'error', error: e?.message || 'upload failed' }
+                return next
+              })
             }
           }
         },
@@ -225,6 +285,16 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
         },
       },
     )
+  }
+
+  /** Called when the user clicks "Done" on the uploading screen. */
+  const handleFinishUploads = () => {
+    if (createdInvId) onCreated(createdInvId, pendingEnrichCnt)
+    reset()
+    setUploadProgress(null)
+    setCreatedInvId(null)
+    setPendingEnrich(0)
+    onClose()
   }
 
   const togglePlatform = (key: string) => {
@@ -608,49 +678,162 @@ export function CreateInvestigationWizard({ open, onClose, onCreated }: Props) {
       title={
         <Space>
           <PlusOutlined />
-          <Text strong>Create Investigation</Text>
+          <Text strong>
+            {uploadProgress ? 'Uploading files…' : 'Create Investigation'}
+          </Text>
         </Space>
       }
       open={open}
-      onCancel={handleClose}
+      onCancel={uploadProgress ? undefined : handleClose}
+      // Block closing via overlay/escape while uploads are in flight —
+      // closing now would orphan the user with no way back to the
+      // progress view.
+      maskClosable={!uploadProgress}
+      closable={!uploadProgress}
       width={660}
       footer={
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Button onClick={handleClose}>Cancel</Button>
-          <Space>
-            {step > 0 && <Button onClick={handleBack}>Back</Button>}
-            {step < TOTAL_STEPS - 1 ? (
-              <Button type="primary" onClick={handleNext}>
-                Next
-              </Button>
-            ) : (
-              <Button
-                type="primary"
-                icon={<SearchOutlined />}
-                loading={createInv.isPending}
-                onClick={handleCreate}
-              >
-                Create Investigation
-              </Button>
-            )}
+        uploadProgress ? (
+          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+            <Button
+              type="primary"
+              disabled={uploadProgress.some(u => u.state === 'pending' || u.state === 'uploading')}
+              onClick={handleFinishUploads}
+            >
+              Done
+            </Button>
           </Space>
-        </Space>
+        ) : (
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Button onClick={handleClose}>Cancel</Button>
+            <Space>
+              {step > 0 && <Button onClick={handleBack}>Back</Button>}
+              {step < TOTAL_STEPS - 1 ? (
+                <Button type="primary" onClick={handleNext}>
+                  Next
+                </Button>
+              ) : (
+                <Button
+                  type="primary"
+                  icon={<SearchOutlined />}
+                  loading={createInv.isPending}
+                  onClick={handleCreate}
+                >
+                  Create Investigation
+                </Button>
+              )}
+            </Space>
+          </Space>
+        )
       }
     >
-      <Steps
-        current={step}
-        size="small"
-        style={{ marginBottom: 24 }}
-        items={[
-          { title: 'Name' },
-          { title: 'Searches' },
-          { title: 'Scrapers',   icon: <ApiOutlined /> },
-          { title: 'Upload',     icon: <CloudUploadOutlined /> },
-          { title: 'Enrichment', icon: <ThunderboltOutlined /> },
-          { title: 'Review' },
-        ]}
-      />
-      {stepContent[step]}
+      {uploadProgress ? (
+        <UploadingView entries={uploadProgress} />
+      ) : (
+        <>
+          <Steps
+            current={step}
+            size="small"
+            style={{ marginBottom: 24 }}
+            items={[
+              { title: 'Name' },
+              { title: 'Searches' },
+              { title: 'Scrapers',   icon: <ApiOutlined /> },
+              { title: 'Upload',     icon: <CloudUploadOutlined /> },
+              { title: 'Enrichment', icon: <ThunderboltOutlined /> },
+              { title: 'Review' },
+            ]}
+          />
+          {stepContent[step]}
+        </>
+      )}
     </Modal>
+  )
+}
+
+/**
+ * Per-file upload progress list shown inside the wizard while files
+ * stream up to the freshly-created investigation. Pure presentational —
+ * the wizard owns all state.
+ */
+function UploadingView({
+  entries,
+}: {
+  entries: Array<{
+    file:    File
+    state:   'pending' | 'uploading' | 'done' | 'error'
+    loaded:  number
+    error?:  string
+  }>
+}) {
+  const fmtSize = (b: number): string => {
+    if (b < 1024) return `${b} B`
+    if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KB`
+    if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`
+    return `${(b / 1024 ** 3).toFixed(2)} GB`
+  }
+  const allDone = entries.every(
+    (e) => e.state === 'done' || e.state === 'error',
+  )
+  const okCount   = entries.filter((e) => e.state === 'done').length
+  const errCount  = entries.filter((e) => e.state === 'error').length
+
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={12}>
+      <Alert
+        type={allDone && errCount === 0 ? 'success' : 'info'}
+        showIcon
+        message={
+          allDone
+            ? `Uploaded ${okCount} of ${entries.length} file${entries.length === 1 ? '' : 's'}`
+                + (errCount ? ` · ${errCount} failed` : '')
+            : `Uploading ${entries.length} file${entries.length === 1 ? '' : 's'} — please don't close this window.`
+        }
+        description={
+          allDone ? (
+            'Click Done to open the investigation. Parsing and indexing happen in the background and you can monitor them on the Uploads tab.'
+          ) : (
+            'Files stream directly to the server. Sequential uploads keep the connection saturated without thrashing.'
+          )
+        }
+      />
+
+      {entries.map((e, i) => {
+        const total   = e.file.size
+        const percent = total > 0 ? Math.min(100, Math.round((e.loaded / total) * 100)) : 0
+        const status:
+          | 'success'
+          | 'exception'
+          | 'active'
+          | 'normal' =
+          e.state === 'done'      ? 'success' :
+          e.state === 'error'     ? 'exception' :
+          e.state === 'uploading' ? 'active' :
+                                    'normal'
+        return (
+          <div key={i} style={{ fontSize: 12 }}>
+            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space size={6}>
+                <Text strong style={{ fontSize: 12 }}>{e.file.name}</Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {fmtSize(total)}
+                </Text>
+              </Space>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {e.state === 'done'      && 'Uploaded ✓'}
+                {e.state === 'uploading' && `${percent}% · ${fmtSize(e.loaded)}`}
+                {e.state === 'pending'   && 'Queued'}
+                {e.state === 'error'     && (e.error || 'Failed')}
+              </Text>
+            </Space>
+            <Progress
+              percent={e.state === 'done' ? 100 : percent}
+              size="small"
+              status={status}
+              showInfo={false}
+            />
+          </div>
+        )
+      })}
+    </Space>
   )
 }

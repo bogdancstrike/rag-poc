@@ -1,12 +1,12 @@
 """XLSX handler — streams via openpyxl ``read_only=True``.
 
-Each sheet is treated as an independent CSV-like body of records. The
-fingerprint folds in sheet names so two workbooks with identical sheets
-can share a profile, but a workbook reshuffled across sheets cannot.
+All visible sheets are ingested. Each row becomes one record; the source
+sheet name is recorded in ``raw.__sheet`` so the user can filter on it
+later in the Data Exploration table. The fingerprint covers all sheet
+headers so workbooks with the same shape collide on the profile cache.
 
-Only the *first* sheet is parsed by default — multi-sheet ingestion is a
-future enhancement (we'd publish one ingest_continue per sheet). The plan
-acknowledges this; flagged in TODO.md if revisited.
+Mixed-shape workbooks (different headers per sheet) still ingest cleanly
+— each sheet is parsed against its own headers.
 """
 from __future__ import annotations
 
@@ -49,25 +49,31 @@ class XlsxHandler:
     # ── Fingerprint ─────────────────────────────────────────────────────────
 
     def fingerprint(self, path: Path, options: dict) -> Optional[str]:
-        """sha256(sheet_name + headers_lower) for the active sheet.
+        """sha256 of every sheet's name + sorted-lowercased headers.
 
-        Active-sheet only for now to match the active-sheet-only extract().
+        Two workbooks with the same sheet structure (same names + same
+        header sets) share a fingerprint, regardless of column order.
         """
-        opts = self._resolve_options(path, options)
         try:
             wb = self._open_workbook(path)
         except Exception as e:
             logger.warning(f"[xlsx] open failed: {e}")
             return None
         try:
-            sheet_name = opts.get("sheet") or wb.sheetnames[0]
-            ws = wb[sheet_name]
-            headers = self._read_headers(ws)
+            parts: list[str] = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                headers = self._read_headers(ws)
+                if not headers:
+                    continue
+                parts.append(sheet_name + ":" + "\t".join(
+                    sorted(h.strip().lower() for h in headers)
+                ))
         finally:
             wb.close()
-        if not headers:
+        if not parts:
             return None
-        canonical = sheet_name + "\n" + "\t".join(sorted(h.strip().lower() for h in headers))
+        canonical = "\n".join(parts)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -89,35 +95,52 @@ class XlsxHandler:
     # ── Mapping proposal ────────────────────────────────────────────────────
 
     def propose_mapping(self, path: Path, options: dict) -> MappingProposal:
+        """Sample rows from the *first non-empty* sheet for the proposal.
+
+        The mapping is then applied uniformly to every sheet at extract time.
+        Multi-sheet workbooks with diverging headers still ingest, but
+        unmapped columns simply land in ``raw`` for that sheet's rows.
+        """
         from src.config import Config
         opts = self._resolve_options(path, options)
         wb = self._open_workbook(path)
         try:
-            sheet_name = opts.get("sheet") or wb.sheetnames[0]
-            opts["sheet"] = sheet_name
-            ws = wb[sheet_name]
+            preview_sheet = wb.sheetnames[0]
+            opts["sheet_names"] = list(wb.sheetnames)
             headers: list[str] = []
             samples: list[dict] = []
-            row_iter = ws.iter_rows(values_only=True)
-            if opts["has_header"]:
-                first = next(row_iter, None)
-                if first is None:
-                    return MappingProposal([], [], {"text": None}, opts, 0.0, "Empty sheet")
-                headers = [str(c) if c is not None else f"col_{i}" for i, c in enumerate(first)]
-            for i, row in enumerate(row_iter):
-                if i >= Config.INGEST_SAMPLE_RECORDS:
-                    break
-                if not headers:
-                    headers = [f"col_{j}" for j in range(len(row))]
-                samples.append({h: ("" if v is None else str(v))
-                                for h, v in zip(headers, row)})
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                row_iter = ws.iter_rows(values_only=True)
+                if opts["has_header"]:
+                    first = next(row_iter, None)
+                    if first is None:
+                        continue
+                    headers = [str(c) if c is not None else f"col_{i}"
+                               for i, c in enumerate(first)]
+                preview_sheet = sheet_name
+                for i, row in enumerate(row_iter):
+                    if i >= Config.INGEST_SAMPLE_RECORDS:
+                        break
+                    if not headers:
+                        headers = [f"col_{j}" for j in range(len(row))]
+                    samples.append({h: ("" if v is None else str(v))
+                                    for h, v in zip(headers, row)})
+                if samples:
+                    break   # first non-empty sheet wins for the preview
+            opts["preview_sheet"] = preview_sheet
         finally:
             wb.close()
         suggested = self._heuristic_mapping(headers, samples)
+        sheet_count = len(opts.get("sheet_names", []))
+        rationale = (
+            "Heuristic — longest text column picked as `text`."
+            + (f" Workbook has {sheet_count} sheet(s); all will be ingested."
+               if sheet_count > 1 else "")
+        )
         return MappingProposal(
             columns=headers, samples=samples, suggested_mapping=suggested,
-            options=opts, confidence=0.5,
-            rationale="Heuristic — longest text column picked as `text`.",
+            options=opts, confidence=0.5, rationale=rationale,
         )
 
     def _heuristic_mapping(self, headers: list[str], samples: list[dict]) -> dict:
@@ -148,6 +171,12 @@ class XlsxHandler:
     # ── Streaming extract ───────────────────────────────────────────────────
 
     def extract(self, path: Path, mapping: dict, options: dict) -> Iterator[RawRecord]:
+        """Yield records from EVERY sheet in the workbook.
+
+        Sheet name is recorded in ``raw.__sheet`` so downstream filters
+        can scope to one sheet. The global record_index counter is
+        contiguous across sheets so stable ES ``_id``s never collide.
+        """
         opts = self._resolve_options(path, options)
         text_col = mapping.get("text")
         title_col = mapping.get("title")
@@ -156,42 +185,52 @@ class XlsxHandler:
         url_col = mapping.get("url")
 
         wb = self._open_workbook(path)
+        global_idx = 0
         try:
-            sheet_name = opts.get("sheet") or wb.sheetnames[0]
-            ws = wb[sheet_name]
-            row_iter = ws.iter_rows(values_only=True)
-            headers: list[str]
-            if opts["has_header"]:
-                first = next(row_iter, None)
-                if first is None:
-                    return
-                headers = [str(c) if c is not None else f"col_{i}"
-                           for i, c in enumerate(first)]
-                start = 0
-            else:
-                first = next(row_iter, None)
-                if first is None:
-                    return
-                headers = [f"col_{i}" for i in range(len(first))]
-                yield self._row_to_record(0, headers, first, text_col, title_col,
-                                          date_col, author_col, url_col)
-                start = 1
-            for idx, row in enumerate(row_iter, start=start):
-                if not row or all(c is None for c in row):
-                    continue
-                yield self._row_to_record(idx, headers, row, text_col, title_col,
-                                          date_col, author_col, url_col)
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                row_iter = ws.iter_rows(values_only=True)
+                headers: list[str] = []
+                if opts["has_header"]:
+                    first = next(row_iter, None)
+                    if first is None:
+                        continue
+                    headers = [str(c) if c is not None else f"col_{i}"
+                               for i, c in enumerate(first)]
+                else:
+                    first = next(row_iter, None)
+                    if first is None:
+                        continue
+                    headers = [f"col_{i}" for i in range(len(first))]
+                    rec = self._row_to_record(
+                        global_idx, headers, first, text_col, title_col,
+                        date_col, author_col, url_col, sheet_name,
+                    )
+                    yield rec
+                    global_idx += 1
+                for row in row_iter:
+                    if not row or all(c is None for c in row):
+                        continue
+                    rec = self._row_to_record(
+                        global_idx, headers, row, text_col, title_col,
+                        date_col, author_col, url_col, sheet_name,
+                    )
+                    yield rec
+                    global_idx += 1
         finally:
             wb.close()
 
     def _row_to_record(self, idx: int, headers: list[str], row,
                        text_col: Optional[str], title_col: Optional[str],
                        date_col:  Optional[str], author_col: Optional[str],
-                       url_col:   Optional[str]) -> RawRecord:
+                       url_col:   Optional[str],
+                       sheet_name: Optional[str] = None) -> RawRecord:
         d = {h: ("" if v is None else str(v)) for h, v in zip(headers, row)}
+        if sheet_name:
+            d["__sheet"] = sheet_name
         text = d.get(text_col, "") if text_col else ""
         if not text:
-            text = " ".join(v for v in d.values() if v)
+            text = " ".join(v for k, v in d.items() if k != "__sheet" and v)
         return RawRecord(
             text=text,
             title=d.get(title_col) if title_col else None,
@@ -205,18 +244,19 @@ class XlsxHandler:
     # ── Estimate ────────────────────────────────────────────────────────────
 
     def estimate_records(self, path: Path, options: dict) -> Optional[int]:
+        """Sum ``max_row - 1`` across every sheet (header offset). Returns
+        None if any sheet doesn't expose ``max_row`` in read-only mode."""
         try:
             wb = self._open_workbook(path)
             try:
                 opts = self._resolve_options(path, options)
-                sheet_name = opts.get("sheet") or wb.sheetnames[0]
-                ws = wb[sheet_name]
-                # ``max_row`` is None in read-only mode for some files; fall
-                # back to None rather than scanning.
-                mr = ws.max_row
-                if mr is None:
-                    return None
-                return max(0, mr - (1 if opts["has_header"] else 0))
+                total = 0
+                for sheet_name in wb.sheetnames:
+                    mr = wb[sheet_name].max_row
+                    if mr is None:
+                        return None
+                    total += max(0, mr - (1 if opts["has_header"] else 0))
+                return total
             finally:
                 wb.close()
         except Exception:

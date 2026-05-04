@@ -66,7 +66,9 @@ class HtmlHandler:
         # "article" prefers <article>/<main>; "paragraph" splits the body
         # into <p>-level records.
         opts.setdefault("chunking", "article")
-        opts.setdefault("min_chars", 40)
+        # Default 0 → keep every paragraph/article body. Empty/whitespace
+        # nodes are still dropped because they contribute nothing.
+        opts.setdefault("min_chars", 0)
         return opts
 
     # ── Fingerprint ─────────────────────────────────────────────────────────

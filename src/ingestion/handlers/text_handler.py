@@ -102,6 +102,18 @@ class TextHandler:
     # ── Options ─────────────────────────────────────────────────────────────
 
     def _resolve_options(self, path: Path, options: dict) -> dict:
+        """Defaults are deliberately *non-lossy*:
+
+        - ``min_chars=0``  — keep every record regardless of length. The user
+                              can raise this in the review drawer if they want
+                              short noise lines filtered out.
+        - ``drop_empty=True`` — only drop blank-after-strip lines, which carry
+                                no information.
+        - ``regex_keep_unmatched=True`` — in regex mode, lines that don't match
+                                the pattern are still emitted as raw-text
+                                records (with ``raw.unmatched=True``) so the
+                                user never silently loses content.
+        """
         opts = dict(options or {})
         if "encoding" not in opts:
             try:
@@ -110,8 +122,9 @@ class TextHandler:
                 opts["encoding"] = _detect_encoding(head)
             except OSError:
                 opts["encoding"] = _FALLBACK_ENCODING
-        opts.setdefault("min_chars", 20)
+        opts.setdefault("min_chars", 0)
         opts.setdefault("drop_empty", True)
+        opts.setdefault("regex_keep_unmatched", True)
         return opts
 
     # ── Mode inference + fingerprint ────────────────────────────────────────
@@ -217,26 +230,46 @@ class TextHandler:
             yield from self._iter_line(path, opts, limit)
             return
         min_chars = opts.get("min_chars", 0)
+        keep_unmatched = opts.get("regex_keep_unmatched", True)
+        drop_empty     = opts.get("drop_empty", True)
         with path.open("r", encoding=opts["encoding"], errors="replace") as f:
             count = 0
             for idx, line in enumerate(f):
                 line = line.rstrip("\n")
+                stripped = line.strip()
+                if drop_empty and not stripped:
+                    continue
                 m = pat.match(line)
-                if not m:
+                if m:
+                    gd = m.groupdict()
+                    text = gd.get("text") or line
+                    if len(text) < min_chars:
+                        # Skip only when the user has *explicitly* asked for
+                        # a min length. With min_chars=0 (default) nothing
+                        # is dropped here.
+                        continue
+                    yield RawRecord(
+                        text=text,
+                        title=gd.get("title"),
+                        created_at=gd.get("created_at"),
+                        author=gd.get("author"),
+                        url=gd.get("url"),
+                        raw={**gd, "_line": line},
+                        record_index=idx,
+                    )
+                elif keep_unmatched:
+                    # Pattern miss → emit the raw line so we never silently
+                    # drop content. Flagged in raw so callers / UI can
+                    # distinguish "parsed" vs "fallback" records.
+                    if len(stripped) < min_chars:
+                        continue
+                    yield RawRecord(
+                        text=stripped,
+                        raw={"_line": line, "unmatched": True},
+                        record_index=idx,
+                    )
+                else:
                     continue
-                gd = m.groupdict()
-                text = gd.get("text") or line
-                if len(text) < min_chars:
-                    continue
-                yield RawRecord(
-                    text=text,
-                    title=gd.get("title"),
-                    created_at=gd.get("created_at"),
-                    author=gd.get("author"),
-                    url=gd.get("url"),
-                    raw={**gd, "_line": line},
-                    record_index=idx,
-                )
                 count += 1
                 if limit is not None and count >= limit:
                     return

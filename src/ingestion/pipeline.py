@@ -188,7 +188,20 @@ def run_index(file_id: str) -> None:
         _set_status(file_id, "error", error="run_index called without final_mapping")
         return
 
-    _set_status(file_id, "indexing", indexed_count=0, error=None)
+    # Best-effort upfront record count so the UI's progress bar shows a
+    # meaningful percentage from the first batch. ``estimate_records``
+    # never blows up indexing — None just means we keep showing only
+    # the "indexed" running total without a denominator.
+    try:
+        est = handler.estimate_records(
+            storage.path_for(investigation_id, file_id), options,
+        )
+    except Exception as e:
+        logger.warning(f"[ingest] estimate_records failed: {e}")
+        est = None
+
+    _set_status(file_id, "indexing", indexed_count=0,
+                record_count=est, error=None)
 
     es = ESClient()
     # Investigation index already exists (created by handle_create_investigation).

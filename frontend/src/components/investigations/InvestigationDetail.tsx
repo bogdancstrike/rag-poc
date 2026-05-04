@@ -259,7 +259,15 @@ export function InvestigationDetail({ id }: Props) {
       ),
       children: (
         <div style={{ height: 'calc(100vh - 152px)', padding: 16, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <DataTable datasource={inv.index_name} enableUrlSync yOffset={380} />
+          <DataTable
+            datasource={inv.index_name}
+            enableUrlSync
+            yOffset={380}
+            // ``q`` lets other tabs (e.g. Uploads → "View N docs")
+            // pre-filter the table by source_file/keyword. Empty/null
+            // hands DataTable back to its internal search-box state.
+            controlledQuery={searchParams.get('q') ?? undefined}
+          />
         </div>
       ),
     },
