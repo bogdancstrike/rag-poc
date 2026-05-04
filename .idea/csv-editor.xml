@@ -38,6 +38,34 @@
             </Attribute>
           </value>
         </entry>
+        <entry key="/data/upload_examples/csv/victims.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/data/uploads/11213ccf-42bc-4311-8377-088566df4b51/6467c535-f320-4e0a-86ec-d1bb13993a8c/original.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/data/uploads/11213ccf-42bc-4311-8377-088566df4b51/c5b2da4c-e208-4b32-a9ec-561615c5a9c2/original.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
+        <entry key="/data/uploads/27a1601a-7dd6-4f64-a327-0c086f981b18/0d27427e-bab2-4098-b72b-20b61678b847/original.csv">
+          <value>
+            <Attribute>
+              <option name="separator" value="," />
+            </Attribute>
+          </value>
+        </entry>
       </map>
     </option>
   </component>

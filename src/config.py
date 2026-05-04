@@ -29,6 +29,7 @@ class Config:
 
     # ── LLM (Ollama OpenAI-compatible API) ─────────────────────────────────────
     LLM_BASE_URL    = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    LLM_MODEL       = os.getenv("LLM_MODEL", "")
     LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
     LLM_TOP_P       = float(os.getenv("LLM_TOP_P", "0.9"))
     LLM_REPETITION_PENALTY = float(os.getenv("LLM_REPETITION_PENALTY", "1.2"))

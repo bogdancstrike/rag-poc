@@ -66,8 +66,8 @@ services:
       --port 8000
       --quantization awq_marlin
       --dtype half
-      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.90}
-      --max-model-len ${VLLM_MAX_MODEL_LEN:-32768}
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.50}
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-14336}
       --max-num-seqs ${VLLM_MAX_NUM_SEQS:-16}
       --enable-chunked-prefill
       --kv-cache-dtype fp8_e5m2
@@ -87,9 +87,12 @@ services:
   # L40S.
   #
   # The two GPU services share the same physical card. bge-large-en-v1.5 is
-  # ~1.3GB FP16 — fits comfortably alongside Qwen3-4B-AWQ on L40S (48GB).
-  # On smaller cards (e.g. RTX 3080 10GB) you'll want to lower vLLM's
-  # ``--gpu-memory-utilization`` to leave headroom, or run TEI on its own.
+  # ~1.3GB FP16. The default ``VLLM_GPU_UTIL=0.50`` and
+  # ``VLLM_MAX_MODEL_LEN=14336`` are sized for an RTX 3080 (10GB) so vLLM +
+  # TEI both fit. On an L40S (48GB) you can safely raise VLLM_GPU_UTIL to
+  # 0.90 and VLLM_MAX_MODEL_LEN to 32768 via .env. If TEI logs
+  # "CUDA_ERROR_OUT_OF_MEMORY → Using CPU instead" then vLLM took too much
+  # — drop ``VLLM_GPU_UTIL`` until both services start clean.
   # Tag 1.7+ fixes a hf-hub-0.3.2 "relative URL without a base" bug that
   # bites 1.5 on first model download. Bumps must keep the GPU variant
   # (CUDA 12); the CPU image is ``-cpu`` suffixed.
