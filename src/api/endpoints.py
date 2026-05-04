@@ -1418,7 +1418,9 @@ def tasks_analytics_handler(app, operation, request, **kwargs):
         status_dist: counts by status
         type_dist  : counts by task_type
     """
-    from src.session.models import InsightsCache, DocumentEnrichment, get_db
+    from src.insights.models import InsightsCache
+    from src.enrichment.models import DocumentEnrichment
+    from src.core.db import get_db
 
     datasource_f = flask_request.args.get("datasource", "")
     category_f   = flask_request.args.get("category", "")

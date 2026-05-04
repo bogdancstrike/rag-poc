@@ -3,7 +3,7 @@
 No external dependencies — tests message assembly logic in isolation.
 """
 import pytest
-from src.rag.prompt_builder import PromptBuilder
+from src.llm.prompts import PromptBuilder
 
 
 @pytest.fixture

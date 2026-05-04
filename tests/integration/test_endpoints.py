@@ -20,7 +20,7 @@ def app():
     sys.path.insert(0, str(root))
     sys.path.insert(0, str(root / "src"))
 
-    from src.session.models import init_db
+    from src.core.db import init_db
     init_db()
 
     from src.config import Config
@@ -360,7 +360,7 @@ class TestDocumentEnrichment:
         assert r.status_code == 400
 
     def test_enrich_queues_task(self, client):
-        with patch("src.worker.kafka_producer.publish_task") as mock_pub:
+        with patch("src.tasking.producer.publish_task") as mock_pub:
             r = _post(client, "/rag/v1/documents/enrich", {
                 "datasource": "ds", "doc_id": "d1", "text": "Threat intel text."
             })

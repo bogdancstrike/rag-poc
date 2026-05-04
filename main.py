@@ -56,8 +56,10 @@ def _recover_dangling_tasks() -> None:
     Enrichment processing → mark error (text not stored; user retries via UI).
     """
     try:
-        from src.session.models import InsightsCache, DocumentEnrichment, get_db
-        from src.worker.kafka_producer import publish_task
+        from src.insights.models import InsightsCache
+        from src.enrichment.models import DocumentEnrichment
+        from src.core.db import get_db
+        from src.tasking.producer import publish_task
 
         with get_db() as db:
             # ── Insights ──────────────────────────────────────────────────────
@@ -141,7 +143,7 @@ def _recover_dangling_tasks() -> None:
             logger.warning(f"[QSINT-RAG] Upload recovery failed: {up_err}")
 
         if pending_enrich:
-            from src.datasource.es_client import ESClient
+            from src.retrieval.es_client import ESClient
             client = ESClient()
             requeued, missing = 0, 0
             for doc_id, datasource in pending_enrich:
@@ -170,7 +172,7 @@ def _recover_dangling_tasks() -> None:
 
 
 def main():
-    from src.rag.llm_client import get_llm
+    from src.llm.client import get_llm
     llm = get_llm()
     logger.info(
         f"[QSINT-RAG] Starting — dev_mode={Config.DEV_MODE} "
@@ -184,7 +186,7 @@ def main():
     signal.signal(signal.SIGINT, _signal_handler)
 
     # Initialize Postgres tables on startup
-    from src.session.models import init_db
+    from src.core.db import init_db
     try:
         init_db()
         logger.info("[QSINT-RAG] Database tables initialized")
@@ -203,7 +205,7 @@ def main():
         logger.warning(f"[QSINT-RAG] Ingestion task handler import failed: {e}")
 
     # Start Kafka consumer worker
-    from src.worker.kafka_consumer import start_consumer
+    from src.tasking.consumer import start_consumer
     try:
         start_consumer()
         logger.info("[QSINT-RAG] Kafka consumer started")

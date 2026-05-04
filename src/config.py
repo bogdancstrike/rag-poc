@@ -82,6 +82,11 @@ class Config:
     EMBED_CACHE_DIR  = os.getenv("EMBED_CACHE_DIR",  "./data/embed_cache")
     EMBED_DIMS       = int(os.getenv("EMBED_DIMS",   "1024"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
+    # When set, the EmbeddingClient POSTs to a TEI GPU server (HTTP). Leave
+    # empty to fall back to the in-process CPU fastembed path — useful for
+    # tests, offline dev, or boxes without an embedding service.
+    EMBED_BASE_URL   = os.getenv("EMBED_BASE_URL", "").rstrip("/")
+    EMBED_TIMEOUT    = int(os.getenv("EMBED_TIMEOUT", "60"))
 
     # ── Kafka / Worker (required by QF framework at import time — unused for RAG) ──
     WORKER_NAME              = os.getenv("WORKER_NAME", "qsint-rag")

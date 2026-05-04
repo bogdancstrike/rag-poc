@@ -193,7 +193,7 @@ class ESClient:
         """
         q = query[:self._MAX_QUERY_LEN]
         try:
-            from src.datasource.embedding_client import get_embedding_client
+            from src.retrieval.embedding_client import get_embedding_client
             vec = get_embedding_client().embed_one(query)
         except Exception as e:
             logger.warning(f"[es] embed failed, falling back to BM25: {e}")
@@ -330,7 +330,7 @@ class ESClient:
             return self.get_sample_docs(n, index_name=idx)
 
         try:
-            from src.datasource.embedding_client import get_embedding_client
+            from src.retrieval.embedding_client import get_embedding_client
             vec = get_embedding_client().embed_one(anchor)
         except Exception as e:
             logger.warning(f"[es] semantic sample embed failed ({e}), using random sample")

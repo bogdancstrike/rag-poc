@@ -86,7 +86,7 @@ def publish_task(task: dict) -> bool:
 
 def _fallback_thread(task: dict) -> None:
     """Run the task directly in a daemon thread when Kafka is unavailable."""
-    from src.worker.task_handlers import dispatch_task
+    from src.tasking.handlers import dispatch_task
     t = threading.Thread(target=dispatch_task, args=(task,), daemon=True)
     t.start()
     logger.debug(f"[kafka-fallback] Thread started for {task.get('task_type')}")

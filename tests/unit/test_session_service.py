@@ -8,8 +8,8 @@ import pytest
 # Point DB at in-memory SQLite before importing anything that touches Config
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
-from src.session.models import init_db, Base, get_engine
-from src.session.session_service import (
+from src.core.db import init_db, Base, get_engine
+from src.chat.service import (
     create_session,
     get_session,
     list_sessions,

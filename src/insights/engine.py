@@ -97,8 +97,8 @@ class InsightsEngine:
             legacy_keys = {"summary", "graph", "stats"}
             if any(k in current_insights for k in legacy_keys):
                 logger.info(f"[insights] Cleaning up legacy tasks for {datasource}")
-                from src.session.models import InsightsCache
-                from src.session.models import get_db
+                from src.insights.models import InsightsCache
+                from src.core.db import get_db
                 with get_db() as db:
                     db.query(InsightsCache).filter(
                         InsightsCache.datasource == datasource,
@@ -123,8 +123,8 @@ class InsightsEngine:
                 logger.warning(
                     f"[insights] Resetting {len(stuck_types)} stuck task(s) for {datasource}: {stuck_types}"
                 )
-                from src.session.models import InsightsCache
-                from src.session.models import get_db
+                from src.insights.models import InsightsCache
+                from src.core.db import get_db
                 with get_db() as db:
                     rows = db.query(InsightsCache).filter(
                         InsightsCache.datasource == datasource,
@@ -169,7 +169,7 @@ class InsightsEngine:
                 logger.info(f"[insights] Scheduling coordinator for {datasource} (forced={force_refresh})")
 
                 # Route the coordinator through Kafka (or daemon thread fallback)
-                from src.worker.kafka_producer import publish_task
+                from src.tasking.producer import publish_task
                 publish_task({
                     "task_type": "insight_coordinator",
                     "datasource": datasource,
@@ -192,8 +192,8 @@ class InsightsEngine:
 
     def invalidate(self, datasource: str = "default") -> None:
         """Delete cached insights, forcing regeneration on next call."""
-        from src.session.models import InsightsCache
-        from src.session.models import get_db
+        from src.insights.models import InsightsCache
+        from src.core.db import get_db
         with get_db() as db:
             db.query(InsightsCache).filter(InsightsCache.datasource == datasource).delete()
         logger.info(f"[insights] Cache invalidated for datasource={datasource}")
@@ -236,7 +236,7 @@ class InsightsEngine:
         Intelligent Skip: If a task is already 'complete' for this sample_hash, 
         do not re-trigger it unless force=True.
         """
-        from src.worker.kafka_producer import publish_task
+        from src.tasking.producer import publish_task
         
         # 1. Load current cache state
         cache = self._load_all_from_cache(datasource)
@@ -358,8 +358,8 @@ class InsightsEngine:
     # ── DB Helpers ──────────────────────────────────────────────────────────────
 
     def _load_all_from_cache(self, datasource: str) -> Dict[str, dict]:
-        from src.session.models import InsightsCache
-        from src.session.models import get_db
+        from src.insights.models import InsightsCache
+        from src.core.db import get_db
         try:
             with get_db() as db:
                 rows = db.query(InsightsCache).filter(InsightsCache.datasource == datasource).all()
@@ -370,9 +370,9 @@ class InsightsEngine:
 
     def get_all_tasks(self) -> dict:
         """Return a platform-wide overview of all tasks (insights & enrichments)."""
-        from src.session.models import InsightsCache
-        from src.session.models import DocumentEnrichment
-        from src.session.models import get_db
+        from src.insights.models import InsightsCache
+        from src.enrichment.models import DocumentEnrichment
+        from src.core.db import get_db
         try:
             with get_db() as db:
                 insight_rows = db.query(InsightsCache).all()
@@ -400,8 +400,8 @@ class InsightsEngine:
     def _set_task_status(self, datasource: str, ttype: str, status: str, sample_hash: str,
                          payload=None, error=None, clear_data=False):
         """Persist task status to DB and broadcast to SSE subscribers."""
-        from src.session.models import InsightsCache
-        from src.session.models import get_db
+        from src.insights.models import InsightsCache
+        from src.core.db import get_db
 
         # Concurrency is handled by SQLAlchemy's pool + transaction retries.
         for attempt in range(2):

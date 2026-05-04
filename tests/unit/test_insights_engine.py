@@ -1,7 +1,7 @@
 """Unit tests for InsightsEngine — task orchestration, JSON parsing, empty-result handling."""
 import pytest
 from unittest.mock import patch, MagicMock, ANY
-from src.rag.insights_engine import InsightsEngine
+from src.insights.engine import InsightsEngine
 
 
 @pytest.fixture
@@ -16,16 +16,16 @@ class TestGetInsights:
     def test_returns_immediately_with_pending_state(self, engine):
         with patch.object(engine, "_load_all_from_cache", return_value={}):
             with patch.object(engine, "_set_task_status"):
-                with patch("src.session.models.get_db"):
-                    with patch("src.worker.kafka_producer.publish_task"):
+                with patch("src.core.db.get_db"):
+                    with patch("src.tasking.producer.publish_task"):
                         resp = engine.get_insights("ds")
         assert resp["_meta"]["refresh_triggered"] is True
 
     def test_publishes_coordinator_task(self, engine):
         with patch.object(engine, "_load_all_from_cache", return_value={}):
             with patch.object(engine, "_set_task_status"):
-                with patch("src.session.models.get_db"):
-                    with patch("src.worker.kafka_producer.publish_task") as mock_pub:
+                with patch("src.core.db.get_db"):
+                    with patch("src.tasking.producer.publish_task") as mock_pub:
                         engine.get_insights("ds")
         mock_pub.assert_called_once_with(
             {"task_type": "insight_coordinator", "datasource": "ds", "force": False}
@@ -47,7 +47,7 @@ class TestGetInsights:
             "top_platforms":         {"status": "complete", "generated_at": recent.isoformat(), "updated_at": recent.isoformat()},
         }
         with patch.object(engine, "_load_all_from_cache", return_value=cache):
-            with patch("src.worker.kafka_producer.publish_task") as mock_pub:
+            with patch("src.tasking.producer.publish_task") as mock_pub:
                 resp = engine.get_insights("ds")
         mock_pub.assert_not_called()
         assert resp["_meta"]["refresh_triggered"] is False
@@ -61,8 +61,8 @@ class TestGetInsights:
         }
         with patch.object(engine, "_load_all_from_cache", return_value=cache):
             with patch.object(engine, "_set_task_status"):
-                with patch("src.session.models.get_db"):
-                    with patch("src.worker.kafka_producer.publish_task") as mock_pub:
+                with patch("src.core.db.get_db"):
+                    with patch("src.tasking.producer.publish_task") as mock_pub:
                         resp = engine.get_insights("ds")
         mock_pub.assert_called_once()
         assert resp["_meta"]["refresh_triggered"] is True
@@ -120,7 +120,7 @@ class TestEmptyJsonHandling:
         with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = "{}"
             with patch.object(engine, "_set_task_status") as mock_status:
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_ai_task("ds", "relationship_network", sample, "hash")
 
         calls = [c for c in mock_status.call_args_list if c[0][2] == "complete"]
@@ -132,7 +132,7 @@ class TestEmptyJsonHandling:
         with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = "{}"
             with patch.object(engine, "_set_task_status") as mock_status:
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_ai_task("ds", "hot_topics_sentiment", sample, "hash")
 
         error_calls = [c for c in mock_status.call_args_list if c[0][2] == "error"]
@@ -144,7 +144,7 @@ class TestEmptyJsonHandling:
         with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = "totally unparseable garbage !!!"
             with patch.object(engine, "_set_task_status") as mock_status:
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_ai_task("ds", "relationship_network", sample, "hash")
 
         error_calls = [c for c in mock_status.call_args_list if c[0][2] == "error"]
@@ -160,7 +160,7 @@ class TestRunStatsTask:
             mock_ret.return_value.get_status.return_value = {"doc_count": 100}
             mock_ret.return_value.get_aggregations.return_value = {}
             with patch.object(engine, "_set_task_status") as mock_status:
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_stats_task("ds", "corpus_statistics", "hash")
 
         complete_calls = [c for c in mock_status.call_args_list if c[0][2] == "complete"]
@@ -171,7 +171,7 @@ class TestRunStatsTask:
             mock_ret.return_value.get_status.return_value = {"doc_count": 50}
             mock_ret.return_value.get_aggregations.return_value = {}
             with patch.object(engine, "_set_task_status") as mock_status:
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_stats_task("ds", "corpus_statistics", "hash")
 
         complete_call = next(c for c in mock_status.call_args_list if c[0][2] == "complete")
@@ -188,7 +188,7 @@ class TestRunAiTask:
         with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = '{"hot_topics": []}'
             with patch.object(engine, "_set_task_status"):
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_ai_task("ds", "hot_topics_sentiment", sample, "hash")
         mock_llm.return_value.complete_json.assert_called_once()
 
@@ -197,7 +197,7 @@ class TestRunAiTask:
         with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.return_value = '{"hot_topics": []}'
             with patch.object(engine, "_set_task_status") as mock_status:
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_ai_task("ds", "hot_topics_sentiment", sample, "hash")
 
         complete_calls = [c for c in mock_status.call_args_list if c[0][2] == "complete"]
@@ -208,7 +208,7 @@ class TestRunAiTask:
         with patch("src.insights.engine.get_llm") as mock_llm:
             mock_llm.return_value.complete_json.side_effect = RuntimeError("LLM crashed")
             with patch.object(engine, "_set_task_status") as mock_status:
-                with patch("src.session.models.get_db"):
+                with patch("src.core.db.get_db"):
                     engine._run_ai_task("ds", "active_narratives", sample, "hash")
 
         error_calls = [c for c in mock_status.call_args_list if c[0][2] == "error"]
@@ -220,14 +220,14 @@ class TestRunAiTask:
 class TestInsightsEventBus:
 
     def test_subscribe_returns_queue(self):
-        from src.rag.insights_engine import InsightsEventBus
+        from src.insights.engine import InsightsEventBus
         bus = InsightsEventBus()
         q = bus.subscribe("ds1")
         import queue
         assert isinstance(q, queue.Queue)
 
     def test_publish_delivers_to_subscriber(self):
-        from src.rag.insights_engine import InsightsEventBus
+        from src.insights.engine import InsightsEventBus
         bus = InsightsEventBus()
         q = bus.subscribe("ds1")
         bus.publish("ds1", {"type": "test", "status": "complete"})
@@ -235,7 +235,7 @@ class TestInsightsEventBus:
         assert event["type"] == "test"
 
     def test_unsubscribe_stops_delivery(self):
-        from src.rag.insights_engine import InsightsEventBus
+        from src.insights.engine import InsightsEventBus
         import queue as q_mod
         bus = InsightsEventBus()
         q = bus.subscribe("ds1")
@@ -245,7 +245,7 @@ class TestInsightsEventBus:
             q.get_nowait()
 
     def test_multiple_subscribers_all_receive(self):
-        from src.rag.insights_engine import InsightsEventBus
+        from src.insights.engine import InsightsEventBus
         bus = InsightsEventBus()
         q1 = bus.subscribe("ds1")
         q2 = bus.subscribe("ds1")
@@ -254,7 +254,7 @@ class TestInsightsEventBus:
         assert q2.get_nowait()["type"] == "done"
 
     def test_publish_to_wrong_datasource_not_delivered(self):
-        from src.rag.insights_engine import InsightsEventBus
+        from src.insights.engine import InsightsEventBus
         import queue as q_mod
         bus = InsightsEventBus()
         q = bus.subscribe("ds1")

@@ -12,7 +12,7 @@ from unittest.mock import patch, MagicMock, call, ANY
 
 def _reset_producer():
     """Reset kafka_producer module state so each test starts clean."""
-    import src.worker.kafka_producer as kp
+    import src.tasking.producer as kp
     kp._producer = None
     kp._kafka_ok = None
 
@@ -36,9 +36,9 @@ class TestPublishTaskTopicRouting:
     def test_llm_task_types_go_to_llm_topic(self, task_type):
         mock_producer = self._make_mock_producer()
 
-        with patch("src.worker.kafka_producer._make_producer", return_value=mock_producer):
+        with patch("src.tasking.producer._make_producer", return_value=mock_producer):
             _reset_producer()
-            from src.worker.kafka_producer import publish_task
+            from src.tasking.producer import publish_task
             from src.config import Config
 
             task = {"task_type": task_type, "datasource": "ds1"}
@@ -52,9 +52,9 @@ class TestPublishTaskTopicRouting:
     def test_fast_task_types_go_to_fast_topic(self, task_type):
         mock_producer = self._make_mock_producer()
 
-        with patch("src.worker.kafka_producer._make_producer", return_value=mock_producer):
+        with patch("src.tasking.producer._make_producer", return_value=mock_producer):
             _reset_producer()
-            from src.worker.kafka_producer import publish_task
+            from src.tasking.producer import publish_task
             from src.config import Config
 
             task = {"task_type": task_type, "datasource": "ds1"}
@@ -67,9 +67,9 @@ class TestPublishTaskTopicRouting:
     def test_publish_task_adds_created_at(self):
         mock_producer = self._make_mock_producer()
 
-        with patch("src.worker.kafka_producer._make_producer", return_value=mock_producer):
+        with patch("src.tasking.producer._make_producer", return_value=mock_producer):
             _reset_producer()
-            from src.worker.kafka_producer import publish_task
+            from src.tasking.producer import publish_task
 
             publish_task({"task_type": "insight_coordinator", "datasource": "ds1"})
 
@@ -79,9 +79,9 @@ class TestPublishTaskTopicRouting:
     def test_publish_task_uses_datasource_as_key(self):
         mock_producer = self._make_mock_producer()
 
-        with patch("src.worker.kafka_producer._make_producer", return_value=mock_producer):
+        with patch("src.tasking.producer._make_producer", return_value=mock_producer):
             _reset_producer()
-            from src.worker.kafka_producer import publish_task
+            from src.tasking.producer import publish_task
 
             publish_task({"task_type": "enrich_doc", "datasource": "my_ds", "doc_id": "1", "text": "x"})
 
@@ -100,10 +100,10 @@ class TestPublishTaskFallback:
 
     def test_fallback_to_thread_when_producer_none(self):
         """When _make_producer raises, get_producer returns None → fallback thread."""
-        with patch("src.worker.kafka_producer._make_producer", side_effect=Exception("no broker")):
+        with patch("src.tasking.producer._make_producer", side_effect=Exception("no broker")):
             _reset_producer()
-            with patch("src.worker.kafka_producer._fallback_thread") as mock_fallback:
-                from src.worker.kafka_producer import publish_task
+            with patch("src.tasking.producer._fallback_thread") as mock_fallback:
+                from src.tasking.producer import publish_task
 
                 result = publish_task({"task_type": "enrich_doc", "datasource": "ds",
                                        "doc_id": "1", "text": "hello"})
@@ -116,10 +116,10 @@ class TestPublishTaskFallback:
         mock_producer = MagicMock()
         mock_producer.send.side_effect = Exception("network error")
 
-        with patch("src.worker.kafka_producer._make_producer", return_value=mock_producer):
+        with patch("src.tasking.producer._make_producer", return_value=mock_producer):
             _reset_producer()
-            with patch("src.worker.kafka_producer._fallback_thread") as mock_fallback:
-                from src.worker.kafka_producer import publish_task
+            with patch("src.tasking.producer._fallback_thread") as mock_fallback:
+                from src.tasking.producer import publish_task
 
                 result = publish_task({"task_type": "insight_ai", "datasource": "ds",
                                        "insight_type": "summary", "sample_hash": "abc"})
@@ -136,8 +136,8 @@ class TestPublishTaskFallback:
         def fake_dispatch(task):
             called_tasks.append(task)
 
-        with patch("src.worker.task_handlers.dispatch_task", fake_dispatch):
-            from src.worker.kafka_producer import _fallback_thread
+        with patch("src.tasking.handlers.dispatch_task", fake_dispatch):
+            from src.tasking.producer import _fallback_thread
             t_ref = []
 
             original_thread = threading.Thread
@@ -147,7 +147,7 @@ class TestPublishTaskFallback:
                 t_ref.append(t)
                 return t
 
-            with patch("src.worker.kafka_producer.threading.Thread", side_effect=capture_thread):
+            with patch("src.tasking.producer.threading.Thread", side_effect=capture_thread):
                 task = {"task_type": "insight_coordinator", "datasource": "ds"}
                 _fallback_thread(task)
 
@@ -173,7 +173,7 @@ class TestDispatchTask:
         ("enrich_field",        "handle_enrich_field"),
     ])
     def test_routes_to_correct_handler(self, task_type, handler_name):
-        from src.worker.task_handlers import dispatch_task
+        from src.tasking.handlers import dispatch_task
 
         with patch(f"src.tasking.handlers.{handler_name}") as mock_handler:
             task = {"task_type": task_type, "datasource": "ds"}
@@ -183,7 +183,7 @@ class TestDispatchTask:
 
     def test_unknown_task_type_does_not_raise(self):
         """dispatch_task should log a warning for unknown types, not raise."""
-        from src.worker.task_handlers import dispatch_task
+        from src.tasking.handlers import dispatch_task
 
         with patch("src.tasking.handlers.logger") as mock_log:
             dispatch_task({"task_type": "totally_unknown", "datasource": "ds"})
@@ -192,7 +192,7 @@ class TestDispatchTask:
 
     def test_handler_exception_is_caught(self):
         """If a handler crashes, dispatch_task catches and logs the error."""
-        from src.worker.task_handlers import dispatch_task
+        from src.tasking.handlers import dispatch_task
 
         with patch("src.tasking.handlers.handle_insight_coordinator",
                    side_effect=RuntimeError("boom")):
@@ -213,7 +213,7 @@ class TestHandleInsightCoordinator:
         mock_engine = MagicMock()
 
         with patch("src.insights.engine.get_insights_engine", return_value=mock_engine):
-            from src.worker.task_handlers import handle_insight_coordinator
+            from src.tasking.handlers import handle_insight_coordinator
             handle_insight_coordinator({"datasource": "my_ds"})
 
         mock_engine.run_all_insights.assert_called_once_with("my_ds", force=False)
@@ -223,7 +223,7 @@ class TestHandleInsightCoordinator:
         mock_engine = MagicMock()
 
         with patch("src.insights.engine.get_insights_engine", return_value=mock_engine):
-            from src.worker.task_handlers import handle_insight_coordinator
+            from src.tasking.handlers import handle_insight_coordinator
             handle_insight_coordinator({"datasource": "ds", "force": True})
 
         mock_engine.run_all_insights.assert_called_once_with("ds", force=True)
@@ -240,7 +240,7 @@ class TestHandleInsightCoordinatorNoDocs:
         mock_engine = MagicMock()
 
         with patch("src.insights.engine.get_insights_engine", return_value=mock_engine):
-            from src.worker.task_handlers import handle_insight_coordinator
+            from src.tasking.handlers import handle_insight_coordinator
             handle_insight_coordinator({"datasource": "empty_ds"})
 
         # Coordinator always delegates to run_all_insights — error handling is internal
@@ -258,7 +258,7 @@ class TestHandleEnrichDoc:
         mock_enrich = MagicMock()
 
         with patch("src.enrichment.pipeline.run_enrichment_background", mock_enrich):
-            from src.worker.task_handlers import handle_enrich_doc
+            from src.tasking.handlers import handle_enrich_doc
 
             task = {"task_type": "enrich_doc", "datasource": "ds1",
                     "doc_id": "doc42", "text": "some text"}
@@ -292,7 +292,7 @@ class TestHandleEnrichFieldIocs:
 
         with patch("src.core.db.get_db", return_value=mock_db_ctx):
             with patch("src.enrichment.pipeline.extract_iocs", mock_extract):
-                from src.worker.task_handlers import handle_enrich_field
+                from src.tasking.handlers import handle_enrich_field
 
                 task = {
                     "task_type": "enrich_field",
@@ -335,7 +335,7 @@ class TestHandleEnrichFieldSentiment:
         with patch("src.core.db.get_db", return_value=mock_db_ctx):
             with patch("src.llm.client.get_llm", return_value=mock_llm):
                 with patch("src.llm.prompts.PromptBuilder", return_value=mock_builder):
-                    from src.worker.task_handlers import handle_enrich_field
+                    from src.tasking.handlers import handle_enrich_field
 
                     task = {
                         "task_type": "enrich_field",

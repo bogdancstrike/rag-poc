@@ -93,6 +93,7 @@ src/
 | Elasticsearch | 9200 | Document storage and retrieval (indices: `qsint_docs*`, `inv_*`) |
 | Kafka | 9094 | Task queue (topics: `qsint.rag.llm_tasks`, `qsint.rag.fast_tasks`) |
 | vLLM | 8000 | LLM inference (OpenAI-compat API). Started via `docker-compose-llm.yml`; can run on a dedicated GPU host. Configure via `LLM_BASE_URL` in `.env`. |
+| TEI | 8080 | GPU embedding server (BAAI/bge-large-en-v1.5). Same compose file as vLLM. App falls back to in-process CPU fastembed when `EMBED_BASE_URL` is unset. |
 | Jaeger | 4317 (OTLP) | Distributed tracing |
 | Redis | 6379 | Framework cache (not used by RAG logic) |
 

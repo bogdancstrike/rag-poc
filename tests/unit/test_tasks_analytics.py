@@ -66,7 +66,8 @@ class TestTasksAnalyticsHandler:
         mock_db = MagicMock()
 
         def mock_query(model):
-            from src.session.models import InsightsCache, DocumentEnrichment
+            from src.insights.models import InsightsCache
+            from src.enrichment.models import DocumentEnrichment
             q = MagicMock()
             if model is InsightsCache:
                 q.filter.return_value = q
@@ -89,7 +90,9 @@ class TestTasksAnalyticsHandler:
         }.get(key, default)
 
         with patch("src.api.endpoints.flask_request", mock_request):
-            with patch("src.session.models.get_db", return_value=mock_ctx):
+            # ``get_db`` is imported lazily inside the handler — patch the
+            # source module so any reference path picks up the mock.
+            with patch("src.core.db.get_db", return_value=mock_ctx):
                 result, status_code = tasks_analytics_handler(None, None, mock_request)
 
         return result, status_code

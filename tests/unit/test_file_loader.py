@@ -7,7 +7,7 @@ import csv
 import uuid
 import pytest
 from pathlib import Path
-from src.datasource.file_loader import FileLoader
+from src.retrieval.file_loader import FileLoader
 
 
 @pytest.fixture

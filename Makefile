@@ -13,7 +13,9 @@ down:
 logs:
 	docker compose logs -f
 
-# ── LLM (vLLM) — separate compose so it can run on a dedicated GPU host ─────
+# ── LLM + Embeddings — separate compose so they can run on a GPU host ─────
+# Brings up both vllm (chat / completion) and TEI (embeddings) on the same
+# GPU. Set ``EMBED_BASE_URL`` in .env to point the app at TEI.
 llm-up llm:
 	docker compose -f docker-compose-llm.yml up -d
 
@@ -22,6 +24,9 @@ llm-down:
 
 llm-logs:
 	docker compose -f docker-compose-llm.yml logs -f vllm
+
+embed-logs:
+	docker compose -f docker-compose-llm.yml logs -f embeddings
 
 # Pull Ollama model (run after Ollama container is up — legacy path)
 pull-model:
