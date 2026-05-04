@@ -1,7 +1,7 @@
 import { useQuery, useQueries, useMutation, useQueryClient, useQueryClient as _useQC } from '@tanstack/react-query'
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { API_BASE } from '@/api/client'
-import { fetchIndices, fetchDocuments, fetchDocumentById, fetchEnrichedDocIds, enrichDocument, reloadEnrichmentField, fetchDocumentStatuses, setDocumentStatus, fetchDocumentLabels, setDocumentLabels, DocReviewStatus, EnrichmentField, DocumentFilters } from '@/api/explore'
+import { fetchIndices, fetchDocuments, fetchDocumentById, fetchEnrichedDocIds, enrichDocument, reloadEnrichmentField, fetchDocumentStatuses, setDocumentStatus, fetchDocumentLabels, setDocumentLabels, fetchDocumentFields, DocReviewStatus, EnrichmentField, DocumentFilters } from '@/api/explore'
 
 export function useIndices() {
   return useQuery({
@@ -25,6 +25,14 @@ export function useDocuments(
     // Allow empty datasource for global explore (all-index search)
     enabled: true,
     staleTime: 10_000,
+  })
+}
+
+export function useDocumentFields(datasource = '', indexPatterns: string[] = []) {
+  return useQuery({
+    queryKey: ['documentFields', datasource, indexPatterns.join(',')],
+    queryFn: () => fetchDocumentFields(datasource, indexPatterns),
+    staleTime: 60_000,
   })
 }
 

@@ -103,6 +103,99 @@ class ESClient:
             logger.error(f"[es] get_index_stats error: {e}")
             return {"error": str(e)}
 
+    def list_document_fields(self, index_name: str = None, pattern: str = "qsint_docs*") -> list[dict]:
+        """Return searchable ES fields for the Data Exploration query builder."""
+        idx = self._resolve_index(index_name) if index_name else (pattern or "qsint_docs*")
+        excluded_types = {"dense_vector", "object", "nested", "flattened", "rank_feature"}
+        preferred_order = {
+            "title": 0, "text": 1, "created_at": 2, "source": 3,
+            "source_file": 4, "source_index": 5, "sentiment": 6,
+            "classification": 7,
+        }
+
+        try:
+            caps = self._client.field_caps(index=idx, fields="*")
+            fields: dict[str, dict] = {}
+            for name, by_type in (caps.get("fields") or {}).items():
+                if name.startswith("_") or name == "embedding":
+                    continue
+                searchable_caps = [
+                    (typ, meta) for typ, meta in by_type.items()
+                    if typ not in excluded_types and meta.get("searchable", True)
+                ]
+                if not searchable_caps:
+                    continue
+                typ = self._normalise_field_type(searchable_caps[0][0])
+                fields[name] = {
+                    "name": name,
+                    "label": self._field_label(name),
+                    "type": typ,
+                    "es_type": searchable_caps[0][0],
+                    "searchable": True,
+                }
+
+            return sorted(
+                fields.values(),
+                key=lambda f: (preferred_order.get(f["name"], 100), f["name"].replace(".keyword", "~")),
+            )
+        except NotFoundError:
+            return []
+        except Exception as e:
+            logger.error(f"[es] list_document_fields error: {e}")
+            return self._list_document_fields_from_mapping(idx)
+
+    def _list_document_fields_from_mapping(self, index_name: str) -> list[dict]:
+        fields: dict[str, dict] = {}
+
+        def walk(props: dict, prefix: str = "") -> None:
+            for name, spec in (props or {}).items():
+                path = f"{prefix}.{name}" if prefix else name
+                typ = spec.get("type")
+                if typ and typ not in {"object", "nested", "dense_vector"}:
+                    fields[path] = {
+                        "name": path,
+                        "label": self._field_label(path),
+                        "type": self._normalise_field_type(typ),
+                        "es_type": typ,
+                        "searchable": True,
+                    }
+                for sub_name, sub_spec in (spec.get("fields") or {}).items():
+                    sub_path = f"{path}.{sub_name}"
+                    sub_typ = sub_spec.get("type")
+                    if sub_typ:
+                        fields[sub_path] = {
+                            "name": sub_path,
+                            "label": self._field_label(sub_path),
+                            "type": self._normalise_field_type(sub_typ),
+                            "es_type": sub_typ,
+                            "searchable": True,
+                        }
+                walk(spec.get("properties") or {}, path)
+
+        try:
+            mapping = self._client.indices.get_mapping(index=index_name)
+            for m in mapping.values():
+                walk(m.get("mappings", {}).get("properties", {}))
+        except Exception as e:
+            logger.error(f"[es] mapping field fallback error: {e}")
+        return sorted(fields.values(), key=lambda f: f["name"])
+
+    @staticmethod
+    def _normalise_field_type(es_type: str) -> str:
+        if es_type in {"keyword", "constant_keyword", "wildcard", "text", "match_only_text"}:
+            return "string"
+        if es_type in {"long", "integer", "short", "byte", "double", "float", "half_float", "scaled_float"}:
+            return "number"
+        if es_type in {"date", "date_nanos"}:
+            return "date"
+        if es_type == "boolean":
+            return "boolean"
+        return "string"
+
+    @staticmethod
+    def _field_label(name: str) -> str:
+        return name.replace(".keyword", " (exact)").replace("_", " ")
+
     # ── Search ──────────────────────────────────────────────────────────────────
 
     def search(self, query: str, top_k: int = 8, index_name: str = None) -> list[dict]:
@@ -422,6 +515,7 @@ class ESClient:
         query: str = None,
         id_filter: Optional[list] = None,
         sentiment_filter: Optional[str] = None,
+        advanced_query: Optional[dict] = None,
     ) -> tuple[list[dict], int]:
         """Get raw documents for tabular exploration. Returns (docs, total_count).
 
@@ -454,15 +548,21 @@ class ESClient:
             else:
                 text_query = {"match_all": {}}
 
-            if filters:
+            must = []
+            if text_query != {"match_all": {}}:
+                must.append(text_query)
+            if advanced_query:
+                filters.append(advanced_query)
+
+            if filters or must:
                 body_query = {
                     "bool": {
-                        "must": text_query,
+                        **({"must": must} if must else {}),
                         "filter": filters,
                     }
                 }
             else:
-                body_query = text_query
+                body_query = {"match_all": {}}
 
             body = {
                 "from": offset,
@@ -577,6 +677,7 @@ class ESClient:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         index_pattern: str = "qsint_docs*",
+        advanced_query: Optional[dict] = None,
     ) -> tuple[list[dict], int]:
         """Multi-index document search for global Data Exploration.
 
@@ -608,10 +709,16 @@ class ESClient:
             else:
                 text_query = {"match_all": {}}
 
+            must = []
+            if text_query != {"match_all": {}}:
+                must.append(text_query)
+            if advanced_query:
+                filters.append(advanced_query)
+
             body_query = (
-                {"bool": {"must": text_query, "filter": filters}}
-                if filters
-                else text_query
+                {"bool": {**({"must": must} if must else {}), "filter": filters}}
+                if filters or must
+                else {"match_all": {}}
             )
 
             body = {

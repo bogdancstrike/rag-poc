@@ -173,6 +173,7 @@ export function MappingReviewDrawer({ upload, open, onClose, investigationId }: 
                 value={mapping.mode || 'paragraph'}
                 onChange={(v) => setMapping((m) => ({ ...m, mode: v as any }))}
                 options={[
+                  { label: 'Whole text (one record for the entire file)', value: 'whole_text' },
                   { label: 'Regex (one record per matching line)', value: 'regex' },
                   { label: 'Paragraph (split on blank lines)', value: 'paragraph' },
                   { label: 'Line (one record per non-empty line)', value: 'line' },
@@ -194,7 +195,7 @@ export function MappingReviewDrawer({ upload, open, onClose, investigationId }: 
               <Input
                 size="small"
                 type="number"
-                value={mapping.min_chars ?? 20}
+                value={mapping.min_chars ?? 0}
                 onChange={(e) => setMapping((m) => ({
                   ...m, min_chars: parseInt(e.target.value, 10) || 0,
                 }))}

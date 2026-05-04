@@ -8,6 +8,8 @@ Three operating modes, picked at ``propose_mapping`` time:
   - ``paragraph``   — split on blank-line runs. Default for prose / markdown.
   - ``line``        — each non-empty line is one record. Use for short logs
                       or messages where blank lines are rare.
+  - ``whole_text``  — emit the complete file as one record. Useful when a text
+                      document should stay intact for review/search.
 
 The inferred pattern is stored in the parser profile, so re-uploading the
 same kind of log file reuses the same regex without LLM involvement.
@@ -218,6 +220,8 @@ class TextHandler:
             yield from self._iter_regex(path, opts, limit)
         elif mode == "line":
             yield from self._iter_line(path, opts, limit)
+        elif mode == "whole_text":
+            yield from self._iter_whole_text(path, opts, limit)
         else:
             yield from self._iter_paragraph(path, opts, limit)
 
@@ -323,6 +327,19 @@ class TextHandler:
                 if len(para) >= min_chars:
                     yield RawRecord(text=para, raw={"paragraph": para}, record_index=idx)
 
+    def _iter_whole_text(self, path: Path, opts: dict,
+                         limit: Optional[int]) -> Iterator[RawRecord]:
+        if limit is not None and limit <= 0:
+            return
+        min_chars = opts.get("min_chars", 0)
+        drop_empty = opts.get("drop_empty", True)
+        text = path.read_text(encoding=opts["encoding"], errors="replace").strip()
+        if drop_empty and not text:
+            return
+        if len(text) < min_chars:
+            return
+        yield RawRecord(text=text, raw={"text": text, "mode": "whole_text"}, record_index=0)
+
     # ── Extract (pipeline-facing) ──────────────────────────────────────────
 
     def extract(self, path: Path, mapping: dict, options: dict) -> Iterator[RawRecord]:
@@ -341,6 +358,10 @@ class TextHandler:
         # Cheap upper bound: number of non-empty lines. Paragraph mode
         # over-estimates, but it's only for the progress UI.
         try:
+            opts = self._resolve_options(path, options)
+            opts = self._infer_mode(path, opts)
+            if opts.get("mode") == "whole_text":
+                return 1
             count = 0
             with path.open("rb") as f:
                 for line in f:

@@ -664,6 +664,57 @@ def datasource_indices_handler(app, operation, request, **kwargs):
             logger.error(f"[api] Error fetching indices: {e}")
             return {"error": str(e)}, 500
 
+def documents_fields_handler(app, operation, request, **kwargs):
+    """GET /v1/documents/fields — return searchable ES fields for query builder."""
+    datasource = (flask_request.args.get("datasource") or "").strip() or None
+    index_pattern = flask_request.args.get("index_pattern", "qsint_docs*").strip() or "qsint_docs*"
+    with tracer.start_as_current_span("api.documents.fields") as span:
+        span.set_attribute("documents.datasource", datasource or "all")
+        try:
+            from src.retrieval.es_client import ESClient
+            client = ESClient()
+            return {"fields": client.list_document_fields(index_name=datasource, pattern=index_pattern)}, 200
+        except Exception as e:
+            logger.error(f"[api] Error fetching document fields: {e}")
+            return {"error": str(e)}, 500
+
+_ALLOWED_ES_QUERY_KEYS = {
+    "bool", "must", "filter", "should", "must_not", "minimum_should_match",
+    "term", "terms", "match", "match_phrase", "multi_match", "range",
+    "exists", "wildcard", "prefix", "regexp", "query_string",
+    "field", "query", "fields", "default_operator", "gte", "gt", "lte", "lt",
+    "value", "values", "boost", "case_insensitive", "type",
+}
+
+def _parse_advanced_query(raw: str | None) -> tuple[dict | None, str | None]:
+    if not raw:
+        return None, None
+    try:
+        parsed = json.loads(raw)
+    except Exception as e:
+        return None, f"invalid advanced_query JSON: {e}"
+    if not isinstance(parsed, dict):
+        return None, "advanced_query must be a JSON object"
+    if not _is_safe_es_query(parsed):
+        return None, "advanced_query contains unsupported Elasticsearch query clauses"
+    return parsed, None
+
+def _is_safe_es_query(value, depth: int = 0) -> bool:
+    if depth > 12:
+        return False
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key not in _ALLOWED_ES_QUERY_KEYS and not isinstance(child, (str, int, float, bool, type(None), list, dict)):
+                return False
+            if key.startswith("script") or key in {"aggs", "aggregations", "sort", "from", "size", "_source"}:
+                return False
+            if not _is_safe_es_query(child, depth + 1):
+                return False
+        return True
+    if isinstance(value, list):
+        return len(value) <= 200 and all(_is_safe_es_query(v, depth + 1) for v in value)
+    return isinstance(value, (str, int, float, bool, type(None)))
+
 def documents_handler(app, operation, request, **kwargs):
     """GET /v1/documents — get raw documents for tabular view.
 
@@ -696,6 +747,9 @@ def documents_handler(app, operation, request, **kwargs):
     filter_date_to        = flask_request.args.get("filter_date_to", "").strip() or None
     filter_enriched       = flask_request.args.get("filter_enriched", "").strip().lower() in ("1", "true", "yes")
     index_pattern         = flask_request.args.get("index_pattern", "qsint_docs*").strip() or "qsint_docs*"
+    advanced_query, advanced_error = _parse_advanced_query(flask_request.args.get("advanced_query"))
+    if advanced_error:
+        return {"error": advanced_error}, 400
 
     filter_labels = [l.strip() for l in filter_labels_raw.split(",") if l.strip()] if filter_labels_raw else []
 
@@ -719,6 +773,7 @@ def documents_handler(app, operation, request, **kwargs):
                     date_from=filter_date_from,
                     date_to=filter_date_to,
                     index_pattern=index_pattern,
+                    advanced_query=advanced_query,
                 )
                 span.set_attribute("documents.total", total)
                 return {"documents": docs, "total": total}, 200
@@ -781,6 +836,7 @@ def documents_handler(app, operation, request, **kwargs):
                 query=query,
                 id_filter=id_filter,
                 sentiment_filter=filter_sentiment,
+                advanced_query=advanced_query,
             )
             span.set_attribute("documents.total", total)
             return {"documents": docs, "total": total}, 200

@@ -180,6 +180,14 @@ class TestTextHandler:
         records = list(handler.extract(path, proposal.suggested_mapping, proposal.options))
         assert len(records) > 0
 
+    def test_whole_text_mode_emits_single_record(self, handler, fixtures_dir):
+        path = fixtures_dir / "txt" / "incident_report.txt"
+        records = list(handler.extract(path, {"mode": "whole_text"}, {}))
+        assert len(records) == 1
+        assert "Executive Summary" in records[0].text
+        assert records[0].raw["mode"] == "whole_text"
+        assert handler.estimate_records(path, {"mode": "whole_text"}) == 1
+
 
 # ── XlsxHandler smoke (no fixture file — write one in test) ──────────────────
 

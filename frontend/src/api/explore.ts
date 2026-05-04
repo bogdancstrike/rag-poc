@@ -23,6 +23,15 @@ export interface DocumentFilters {
   date_to?: string
   index_patterns?: string[]
   enriched?: boolean
+  advanced_query?: Record<string, any>
+}
+
+export interface DocumentField {
+  name: string
+  label: string
+  type: 'string' | 'number' | 'date' | 'boolean'
+  es_type: string
+  searchable: boolean
 }
 
 export const fetchDocuments = async (
@@ -45,8 +54,20 @@ export const fetchDocuments = async (
     params.index_pattern = filters.index_patterns.join(',')
   }
   if (filters.enriched)            params.filter_enriched       = 'true'
+  if (filters.advanced_query)       params.advanced_query        = JSON.stringify(filters.advanced_query)
   const { data } = await apiClient.get<{ documents: Document[]; total: number }>('/v1/documents', { params })
   return data
+}
+
+export const fetchDocumentFields = async (
+  datasource = '',
+  indexPatterns: string[] = [],
+): Promise<DocumentField[]> => {
+  const params: Record<string, any> = {}
+  if (datasource) params.datasource = datasource
+  else if (indexPatterns.length) params.index_pattern = indexPatterns.join(',')
+  const { data } = await apiClient.get<{ fields: DocumentField[] }>('/v1/documents/fields', { params })
+  return data.fields
 }
 
 export interface DocumentEnrichmentPayload {
