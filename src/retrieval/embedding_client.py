@@ -31,9 +31,10 @@ from src.config import Config
 # size for typical request payloads (each text ≤ 2000 chars).
 _TEI_BATCH = 32
 
-# Per-text length cap before sending. bge-large-en-v1.5 is trained on
-# 512-token sequences; 2000 chars covers that comfortably.
-_TEXT_TRUNCATE = 2000
+# Per-text character cap before sending. TEI performs tokenizer-aware
+# truncation at the model limit when launched with --auto-truncate; this
+# protects request payload size without forcing the old 512-token path.
+_TEXT_TRUNCATE = Config.EMBED_TEXT_TRUNCATE_CHARS
 
 
 class EmbeddingClient:

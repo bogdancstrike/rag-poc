@@ -43,6 +43,21 @@ class TestCsvHandler:
         first = records[0]
         assert "email" in first.raw
         assert "ip_address" in first.raw
+        assert "email:" in first.text
+        assert "ip_address:" in first.text
+
+    def test_extract_wide_csv_preserves_and_searches_all_columns(self, handler, tmp_path):
+        headers = [f"col_{i}" for i in range(100)]
+        values = [f"value_{i}" for i in range(100)]
+        path = tmp_path / "wide.csv"
+        path.write_text(",".join(headers) + "\n" + ",".join(values) + "\n", encoding="utf-8")
+
+        records = list(handler.extract(path, {"text": "col_0"}, {"delimiter": ",", "encoding": "utf-8"}))
+
+        assert len(records) == 1
+        assert len(records[0].raw) == 100
+        assert records[0].raw["col_99"] == "value_99"
+        assert "col_99: value_99" in records[0].text
 
     def test_propose_mapping_finds_text_column(self, handler, fixtures_dir):
         path = fixtures_dir / "csv" / "support_tickets.csv"

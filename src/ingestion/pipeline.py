@@ -335,7 +335,7 @@ def run_embed(file_id: str) -> None:
             ids:   list[str] = []
             for hit in hits:
                 src = hit.get("_source", {})
-                t = (src.get("text") or src.get("title") or "")[:2000]
+                t = (src.get("text") or src.get("title") or "")[:Config.EMBED_TEXT_TRUNCATE_CHARS]
                 texts.append(t)
                 ids.append(hit["_id"])
             if texts:

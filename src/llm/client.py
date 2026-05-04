@@ -8,6 +8,7 @@ import re
 from typing import Generator
 
 from openai import OpenAI
+from openai import NotFoundError
 from framework.commons.logger import logger
 from framework.tracing import get_tracer
 
@@ -141,9 +142,21 @@ class LLMClient:
                 logger.error("[llm] No models found on inference server.")
                 return
 
-            # Prefer instruct/chat variants; fall back to the first listed model
-            instruct = [m for m in models if "instruct" in m.get("id", "").lower()]
-            model_entry = instruct[0] if instruct else models[0]
+            configured = (Config.LLM_MODEL or "").strip()
+            model_entry = None
+            if configured:
+                model_entry = next((m for m in models if m.get("id") == configured), None)
+                if model_entry is None:
+                    logger.warning(
+                        f"[llm] Configured LLM_MODEL={configured!r} is not served by "
+                        f"{Config.LLM_BASE_URL}; using server model list instead."
+                    )
+
+            # Prefer the configured model when it is actually served; otherwise
+            # prefer instruct/chat variants; fall back to the first listed model.
+            if model_entry is None:
+                instruct = [m for m in models if "instruct" in m.get("id", "").lower()]
+                model_entry = instruct[0] if instruct else models[0]
             self._model = model_entry["id"]
 
             # SGLang and vLLM expose max_model_len in the model object
@@ -165,9 +178,24 @@ class LLMClient:
 
         except Exception as e:
             logger.error(f"[llm] Model discovery failed: {e}")
-            self._model = "Qwen/Qwen2.5-3B-Instruct"
+            self._model = Config.LLM_MODEL or "unknown"
             if Config.LLM_INSIGHTS_CTX == 0: Config.LLM_INSIGHTS_CTX = 4096
             if Config.LLM_CHAT_CTX == 0:     Config.LLM_CHAT_CTX = 4096
+
+    def _rediscover_after_not_found(self, error: Exception) -> bool:
+        """Refresh model metadata after the server rejects our current model.
+
+        This happens when the backend process starts before vLLM is ready and
+        caches a fallback/configured model, then vLLM later comes up serving a
+        different model. Return True when discovery found a different model.
+        """
+        old_model = self._model
+        logger.warning(f"[llm] Model {old_model!r} was rejected by server: {error}. Re-discovering.")
+        self._discover_model()
+        changed = bool(self._model and self._model != old_model and self._model != "unknown")
+        if changed:
+            logger.info(f"[llm] Recovered model selection: {old_model!r} -> {self._model!r}")
+        return changed
 
     # ── Synchronous completion ──────────────────────────────────────────────────
 
@@ -212,6 +240,13 @@ class LLMClient:
                     logger.error(f"[llm] complete error after {max_retries} attempts: {e}", exc_info=True)
                     span.set_attribute("llm.error", str(e))
                     raise
+                except NotFoundError as e:
+                    if self._rediscover_after_not_found(e) and attempt < max_retries - 1:
+                        full_messages = self._build_messages(messages, system)
+                        continue
+                    logger.error(f"[llm] complete model not found: {e}", exc_info=True)
+                    span.set_attribute("llm.error", str(e))
+                    raise
                 except Exception as e:
                     logger.error(f"[llm] complete error: {e}", exc_info=True)
                     span.set_attribute("llm.error", str(e))
@@ -254,6 +289,13 @@ class LLMClient:
                         time.sleep(retry_delay)
                         continue
                     logger.error(f"[llm] stream error after {max_retries} attempts: {e}", exc_info=True)
+                    span.set_attribute("llm.error", str(e))
+                    raise
+                except NotFoundError as e:
+                    if self._rediscover_after_not_found(e) and attempt < max_retries - 1:
+                        full_messages = self._build_messages(messages, system)
+                        continue
+                    logger.error(f"[llm] stream model not found: {e}", exc_info=True)
                     span.set_attribute("llm.error", str(e))
                     raise
                 except Exception as e:
@@ -326,6 +368,13 @@ class LLMClient:
                     logger.error(f"[llm] complete_json error after {max_retries} attempts: {e}", exc_info=True)
                     span.set_attribute("llm.error", str(e))
                     raise
+                except NotFoundError as e:
+                    if self._rediscover_after_not_found(e) and attempt < max_retries - 1:
+                        full_messages = self._build_messages(messages, system)
+                        continue
+                    logger.error(f"[llm] complete_json model not found: {e}", exc_info=True)
+                    span.set_attribute("llm.error", str(e))
+                    raise
                 except Exception as e:
                     logger.error(f"[llm] complete_json error: {e}", exc_info=True)
                     span.set_attribute("llm.error", str(e))
@@ -380,11 +429,16 @@ class LLMClient:
                 models = r.json().get("data", [])
                 if models:
                     m = models[0]
+                    served_model = m.get("id")
+                    if served_model:
+                        result["model"] = served_model
+                        if self._model in (None, "unknown") or self._model != served_model:
+                            self._model = served_model
                     result["max_model_len"] = m.get("max_model_len", result.get("context_length"))
                     # vLLM stops here; populate UI-friendly fallbacks so the
                     # stats card isn't half-empty when SGLang fields are absent.
                     result.setdefault("context_length", result.get("max_model_len"))
-                    result.setdefault("served_model_name", m.get("id"))
+                    result.setdefault("served_model_name", served_model)
                     result["backend"] = "vllm" if "model_info" in unsupported else "sglang"
         except Exception:
             pass

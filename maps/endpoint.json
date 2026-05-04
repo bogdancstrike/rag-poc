@@ -451,6 +451,17 @@
     },
     {
       "namespace": "rag",
+      "operation_name": "v1_embeddings_live",
+      "model_name": "Empty",
+      "request_method": ["GET"],
+      "api_url": "/v1/embeddings/live",
+      "exec_method": {
+        "module_name": "api.endpoints",
+        "method_name": "embeddings_live_handler"
+      }
+    },
+    {
+      "namespace": "rag",
       "operation_name": "v1_tasks_restart_active",
       "model_name": "Empty",
       "request_method": ["POST"],

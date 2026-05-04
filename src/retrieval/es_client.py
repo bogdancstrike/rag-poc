@@ -445,7 +445,11 @@ class ESClient:
 
             if query:
                 text_query = {
-                    "query_string": {"query": query, "default_operator": "AND"}
+                    "query_string": {
+                        "query": query,
+                        "default_operator": "AND",
+                        "fields": ["title^4", "text^2", "raw.*", "*"],
+                    }
                 }
             else:
                 text_query = {"match_all": {}}
@@ -594,7 +598,13 @@ class ESClient:
 
             if query:
                 q = query[:self._MAX_QUERY_LEN]
-                text_query = {"query_string": {"query": q, "default_operator": "AND"}}
+                text_query = {
+                    "query_string": {
+                        "query": q,
+                        "default_operator": "AND",
+                        "fields": ["title^4", "text^2", "raw.*", "*"],
+                    }
+                }
             else:
                 text_query = {"match_all": {}}
 

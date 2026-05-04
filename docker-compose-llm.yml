@@ -81,13 +81,15 @@ services:
     restart: unless-stopped
 
   # ── TEI (Text Embeddings Inference) — GPU embedding server ──────────────────
-  # Runs the same BAAI/bge-large-en-v1.5 model the app uses, but on the GPU
+  # Runs BAAI/bge-m3 on the GPU. bge-m3 keeps the 1024-dim vector shape used
+  # by the Elasticsearch mapping while supporting an ~8k-token input window.
   # alongside vLLM. Replaces the in-process CPU fastembed path on production
   # boxes — a 4417-doc embed that takes ~90s on CPU finishes in <5s on an
   # L40S.
   #
-  # The two GPU services share the same physical card. bge-large-en-v1.5 is
-  # ~1.3GB FP16. The default ``VLLM_GPU_UTIL=0.50`` and
+  # The two GPU services share the same physical card. bge-m3 is larger than
+  # bge-large-en-v1.5, but still fits on the local RTX 3080 when vLLM uses the
+  # reduced 10GB profile. The default ``VLLM_GPU_UTIL=0.50`` and
   # ``VLLM_MAX_MODEL_LEN=14336`` are sized for an RTX 3080 (10GB) so vLLM +
   # TEI both fit. On an L40S (48GB) you can safely raise VLLM_GPU_UTIL to
   # 0.90 and VLLM_MAX_MODEL_LEN to 32768 via .env. If TEI logs
@@ -114,13 +116,15 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # ``--pooling cls`` matches what bge-large-en-v1.5 was trained with;
-    # ``--max-batch-tokens`` sets a soft GPU-memory ceiling. The stock
-    # default of 16384 is fine here — we batch 64 docs of ≤512 tokens.
+    # bge-m3 has a CLS pooling config in the model repo. ``--auto-truncate``
+    # accepts longer documents and truncates them at the model's ~8k-token
+    # limit instead of returning a 4xx response. ``--max-batch-tokens`` sets
+    # a soft GPU-memory ceiling.
     command: >
-      --model-id ${TEI_MODEL:-BAAI/bge-large-en-v1.5}
+      --model-id ${TEI_MODEL:-BAAI/bge-m3}
       --pooling cls
       --max-batch-tokens 16384
+      --auto-truncate
       --hostname 0.0.0.0
       --port 80
     healthcheck:

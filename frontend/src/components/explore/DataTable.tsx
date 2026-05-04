@@ -647,6 +647,18 @@ function DocumentDetailPanel({ datasource, doc, reviewStatus, onStatusChange, on
       : 'idle'
   const enrichError = enrichData?.error ?? null
   const restream = () => forceReenrich.mutate(doc.text || '')
+  const rawRows = useMemo(() => {
+    const raw = (doc as any).raw
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
+    return Object.entries(raw).map(([field, value]) => ({
+      field,
+      value: value == null
+        ? ''
+        : typeof value === 'string'
+        ? value
+        : JSON.stringify(value),
+    }))
+  }, [doc])
 
   const entities: EntityInfo[] = enrichPayload?.entities ?? []
   const enrichedSentiment = enrichPayload?.sentiment || doc.sentiment
@@ -803,6 +815,51 @@ function DocumentDetailPanel({ datasource, doc, reviewStatus, onStatusChange, on
         </div>
 
         <Divider style={{ margin: '12px 0' }} />
+
+        {/* Uploaded source fields */}
+        {rawRows.length > 0 && (
+          <>
+            <div>
+              <Row justify="space-between" align="middle">
+                <Text type="secondary" style={{ fontSize: 11 }}>SOURCE FIELDS</Text>
+                <Tag style={{ fontSize: 10 }}>{rawRows.length} fields</Tag>
+              </Row>
+              <Divider style={{ margin: '6px 0 10px' }} />
+              <Table
+                rowKey="field"
+                dataSource={rawRows}
+                pagination={rawRows.length > 12 ? { pageSize: 12, size: 'small' } : false}
+                size="small"
+                tableLayout="fixed"
+                columns={[
+                  {
+                    title: 'Field',
+                    dataIndex: 'field',
+                    key: 'field',
+                    width: 180,
+                    ellipsis: true,
+                    render: (value: string) => <Text code style={{ fontSize: 12 }}>{value}</Text>,
+                  },
+                  {
+                    title: 'Value',
+                    dataIndex: 'value',
+                    key: 'value',
+                    render: (value: string) => (
+                      <Paragraph
+                        style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}
+                        ellipsis={{ rows: 3, expandable: true, symbol: 'more' }}
+                      >
+                        {value || '—'}
+                      </Paragraph>
+                    ),
+                  },
+                ]}
+              />
+            </div>
+
+            <Divider style={{ margin: '12px 0' }} />
+          </>
+        )}
 
         {/* Labels / Tags */}
         <LabelsSection

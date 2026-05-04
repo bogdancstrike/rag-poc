@@ -88,6 +88,58 @@ export const fetchLLMLive = async (): Promise<LLMLiveStats> => {
   return data
 }
 
+export interface EmbeddingsGpuProcess {
+  pid: number
+  name: string
+  used_mib: number
+  role: 'embeddings' | 'llm' | 'other'
+}
+
+export interface EmbeddingsGpuStats {
+  available: boolean
+  reason?: string
+  total_mib?: number
+  used_mib?: number
+  embeddings_mib?: number
+  llm_mib?: number
+  other_mib?: number
+  processes?: EmbeddingsGpuProcess[]
+}
+
+export interface EmbeddingsLiveStats {
+  available: boolean
+  backend?: string
+  reason?: string
+  base_url?: string
+  model?: string
+  model_dtype?: string
+  pooling?: string
+  max_input_length?: number | null
+  max_batch_tokens?: number | null
+  max_client_batch_size?: number | null
+  max_concurrent_requests?: number | null
+  tokenization_workers?: number | null
+  version?: string | null
+  request_count?: number | null
+  success_count?: number | null
+  embed_count?: number | null
+  embedded_records_total?: number | null
+  queue_size?: number | null
+  avg_request_ms?: number | null
+  avg_inference_ms?: number | null
+  avg_queue_ms?: number | null
+  avg_tokenization_ms?: number | null
+  avg_input_tokens?: number | null
+  avg_batch_tokens?: number | null
+  avg_batch_size?: number | null
+  gpu?: EmbeddingsGpuStats
+}
+
+export const fetchEmbeddingsLive = async (): Promise<EmbeddingsLiveStats> => {
+  const { data } = await apiClient.get<EmbeddingsLiveStats>('/v1/embeddings/live')
+  return data
+}
+
 /** Restart an insight or enrichment task. */
 export const restartTask = async (
   task_category: 'insight' | 'enrichment',

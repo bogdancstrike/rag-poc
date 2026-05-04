@@ -28,8 +28,8 @@ def normalize(rec: RawRecord, file_id: str, filename: str) -> dict:
 
     Truncates ``text`` to ``Config.INGEST_TEXT_TRUNCATE`` chars to bound
     indexing/enrichment cost on pathologically large cells. The full
-    original is preserved in ``raw`` (also truncated to keep the doc size
-    sane — ES has a hard 100MB limit per doc).
+    original row is preserved in ``raw`` so uploaded tabular data remains
+    visible and searchable by source column.
 
     Title fallback: scraped/searched documents always have a ``title``,
     but uploaded records often don't (CSV row, JSON object without a
@@ -45,10 +45,6 @@ def normalize(rec: RawRecord, file_id: str, filename: str) -> dict:
         text = text[:Config.INGEST_TEXT_TRUNCATE]
 
     raw = rec.raw or {}
-    if isinstance(raw, dict):
-        # Bound the raw payload too — same reason as text truncation. We
-        # don't aggregate sizes; if an individual value is huge we trim it.
-        raw = {k: _trim(v) for k, v in raw.items()}
 
     title = (rec.title or "").strip() or None
     title_synthetic = False
@@ -91,9 +87,3 @@ def _summarise_for_title(text: str, cap: int = 80) -> str:
     if last_space > 40:    # only break on space if there's room
         cut = cut[:last_space]
     return cut + "…"
-
-
-def _trim(v, cap: int = 4000):
-    if isinstance(v, str) and len(v) > cap:
-        return v[:cap]
-    return v

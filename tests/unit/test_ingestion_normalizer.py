@@ -76,10 +76,9 @@ class TestNormalize:
         doc = normalize(rec, "file-x", "big.txt")
         assert len(doc["text"]) <= 20000
 
-    def test_raw_value_trimming(self):
-        # raw values capped per-key at 4000 chars
+    def test_raw_values_are_preserved(self):
         big_value = "x" * 5000
         rec = RawRecord(text="t", raw={"summary": big_value, "small": "ok"})
         doc = normalize(rec, "file-x", "f.csv")
-        assert len(doc["raw"]["summary"]) == 4000
+        assert doc["raw"]["summary"] == big_value
         assert doc["raw"]["small"] == "ok"

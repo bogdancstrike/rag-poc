@@ -271,7 +271,7 @@ def handle_embed_docs(task: dict) -> None:
                     src.get("text") or src.get("content") or src.get("body")
                     or src.get("description") or src.get("title") or ""
                 )
-                texts.append(text[:2000])
+                texts.append(text[:Config.EMBED_TEXT_TRUNCATE_CHARS])
                 ids.append(hit["_id"])
 
             if not texts:

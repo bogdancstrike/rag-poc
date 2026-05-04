@@ -264,9 +264,7 @@ class CsvHandler:
         if len(row) > len(headers):
             for i in range(len(headers), len(row)):
                 d[f"__extra_{i}"] = row[i]
-        text = (d.get(text_col, "") if text_col else "") or ""
-        if not text:
-            text = " ".join(str(v) for v in d.values() if v)
+        text = _full_row_text(d, preferred_key=text_col)
         return RawRecord(
             text=text,
             title=d.get(title_col) if title_col else None,
@@ -295,3 +293,22 @@ class CsvHandler:
 
 
 register(CsvHandler())
+
+
+def _full_row_text(row: dict, preferred_key: Optional[str] = None) -> str:
+    """Build a searchable representation containing every CSV column.
+
+    The mapped text column is placed first for title/preview quality, but
+    every non-empty cell is included as ``column: value`` so Data Exploration,
+    RAG retrieval, and enrichment can find values from wide CSVs.
+    """
+    parts: list[str] = []
+    seen: set[str] = set()
+    if preferred_key and row.get(preferred_key):
+        parts.append(str(row[preferred_key]))
+        seen.add(preferred_key)
+    for key, value in row.items():
+        if key in seen or value in (None, ""):
+            continue
+        parts.append(f"{key}: {value}")
+    return "\n".join(parts)

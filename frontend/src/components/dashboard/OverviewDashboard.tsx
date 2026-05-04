@@ -3,6 +3,10 @@ import {
   Button, Progress, theme, Statistic, Descriptions,
 } from 'antd'
 import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
+  ResponsiveContainer, Cell,
+} from 'recharts'
+import {
   DashboardOutlined, CheckCircleOutlined, SyncOutlined,
   WarningOutlined, RightOutlined, BulbOutlined, RobotOutlined,
   SettingOutlined, ThunderboltOutlined, DatabaseOutlined,
@@ -10,7 +14,7 @@ import {
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import { useTasks } from '@/hooks/useTasks'
-import { useLLMStats, useLLMLive } from '@/hooks/useLLMStats'
+import { useLLMStats, useLLMLive, useEmbeddingsLive } from '@/hooks/useLLMStats'
 import { PageHeader } from '../common/PageHeader'
 
 dayjs.extend(utc)
@@ -29,6 +33,13 @@ function fmtBytes(b: number | null | undefined): string {
   return `${(b / 1024 ** 3).toFixed(2)} GB`
 }
 
+function fmtMs(ms: number | null | undefined): string {
+  if (ms == null) return '—'
+  if (ms < 1) return `${ms.toFixed(2)} ms`
+  if (ms < 1000) return `${ms.toFixed(1)} ms`
+  return `${(ms / 1000).toFixed(2)} s`
+}
+
 interface Props {
   onGoToTasks?: () => void
 }
@@ -38,6 +49,7 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
   const { data, isLoading, error } = useTasks({ size: 1 })
   const { data: llmStats, isLoading: isLlmLoading } = useLLMStats()
   const { data: llmLive } = useLLMLive()
+  const { data: embeddingsLive } = useEmbeddingsLive()
   const stats = data?.stats
 
   if (isLoading) {
@@ -67,6 +79,18 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
   const running  = (stats?.pending ?? 0) + (stats?.processing ?? 0)
   const errors   = stats?.error      ?? 0
   const pct      = total > 0 ? Math.round((complete / total) * 100) : 0
+  const gpu = embeddingsLive?.gpu
+  const gpuChartData = gpu?.available ? [
+    { name: 'LLM', mib: gpu.llm_mib ?? 0, color: token.colorPrimary },
+    { name: 'Embeddings', mib: gpu.embeddings_mib ?? 0, color: token.colorSuccess },
+    { name: 'Other', mib: gpu.other_mib ?? 0, color: token.colorTextTertiary },
+  ].filter((d) => d.mib > 0) : []
+  const embeddingLatencyData = embeddingsLive?.available ? [
+    { name: 'Queue', ms: embeddingsLive.avg_queue_ms ?? 0, color: token.colorWarning },
+    { name: 'Tokenize', ms: embeddingsLive.avg_tokenization_ms ?? 0, color: token.colorInfo },
+    { name: 'Infer', ms: embeddingsLive.avg_inference_ms ?? 0, color: token.colorSuccess },
+    { name: 'Total', ms: embeddingsLive.avg_request_ms ?? 0, color: token.colorPrimary },
+  ] : []
 
   const statCards = [
     {
@@ -221,6 +245,184 @@ export function OverviewDashboard({ onGoToTasks }: Props) {
                 {llmStats?.max_running_requests ?? '—'}
               </Descriptions.Item>
             </Descriptions>
+          )}
+        </Card>
+
+        {/* Embeddings runtime — TEI /metrics + best-effort NVIDIA process VRAM. */}
+        <Card
+          size="small"
+          variant="borderless"
+          title={
+            <Space>
+              <DatabaseOutlined style={{ color: token.colorSuccess }} />
+              <span style={{ fontSize: 14, fontWeight: 600 }}>Embeddings Runtime</span>
+              {embeddingsLive?.available && (
+                <Tag color="success" style={{ fontSize: 10, marginLeft: 4 }}>
+                  <SyncOutlined spin /> live
+                </Tag>
+              )}
+            </Space>
+          }
+          style={{
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+          }}
+        >
+          {!embeddingsLive ? (
+            <div style={{ textAlign: 'center', padding: 20 }}><Spin size="small" /></div>
+          ) : !embeddingsLive.available ? (
+            <Alert
+              type="info"
+              showIcon
+              message="Embeddings metrics unavailable"
+              description={embeddingsLive.reason || 'The embedding backend is not exposing TEI metrics.'}
+            />
+          ) : (
+            <>
+              <Descriptions column={{ xs: 1, sm: 2, md: 4 }} size="small" bordered={false}>
+                <Descriptions.Item label={<Text type="secondary">Model</Text>}>
+                  <Text strong>{embeddingsLive.model?.split('/').pop() ?? '—'}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label={<Text type="secondary">Backend</Text>}>
+                  <Tag color="success" style={{ borderRadius: 4, fontSize: 10 }}>
+                    {embeddingsLive.backend ?? 'tei'}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label={<Text type="secondary">Dtype</Text>}>
+                  {embeddingsLive.model_dtype ?? '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label={<Text type="secondary">Pooling</Text>}>
+                  {embeddingsLive.pooling ?? '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label={<Text type="secondary">Max Input</Text>}>
+                  {embeddingsLive.max_input_length?.toLocaleString() ?? '—'} tokens
+                </Descriptions.Item>
+                <Descriptions.Item label={<Text type="secondary">Batch Tokens</Text>}>
+                  {embeddingsLive.max_batch_tokens?.toLocaleString() ?? '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label={<Text type="secondary">Client Batch</Text>}>
+                  {embeddingsLive.max_client_batch_size?.toLocaleString() ?? '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label={<Text type="secondary">Workers</Text>}>
+                  {embeddingsLive.tokenization_workers?.toLocaleString() ?? '—'}
+                </Descriptions.Item>
+              </Descriptions>
+
+              <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
+                <Col xs={12} sm={8} md={6}>
+                  <Statistic
+                    title={<Text type="secondary">Embedded Records (lifetime)</Text>}
+                    value={embeddingsLive.embedded_records_total ?? embeddingsLive.embed_count ?? 0}
+                    valueStyle={{ fontSize: 22, color: token.colorSuccess }}
+                  />
+                </Col>
+                <Col xs={12} sm={8} md={6}>
+                  <Statistic
+                    title={<Text type="secondary">Embed Requests</Text>}
+                    value={embeddingsLive.request_count ?? 0}
+                    valueStyle={{ fontSize: 22 }}
+                  />
+                </Col>
+                <Col xs={12} sm={8} md={6}>
+                  <Statistic
+                    title={<Text type="secondary">Queue Size</Text>}
+                    value={embeddingsLive.queue_size ?? 0}
+                    valueStyle={{
+                      fontSize: 22,
+                      color: (embeddingsLive.queue_size ?? 0) > 0 ? token.colorWarning : token.colorTextSecondary,
+                    }}
+                  />
+                </Col>
+                <Col xs={12} sm={8} md={6}>
+                  <Statistic
+                    title={<Text type="secondary">Avg Request</Text>}
+                    value={fmtMs(embeddingsLive.avg_request_ms)}
+                    valueStyle={{ fontSize: 22 }}
+                  />
+                </Col>
+              </Row>
+
+              <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
+                <Col xs={12} sm={8} md={6}>
+                  <Statistic
+                    title={<Text type="secondary">Avg Input</Text>}
+                    value={
+                      embeddingsLive.avg_input_tokens != null
+                        ? embeddingsLive.avg_input_tokens.toFixed(1)
+                        : '—'
+                    }
+                    suffix={embeddingsLive.avg_input_tokens != null ? 'tok' : ''}
+                    valueStyle={{ fontSize: 22 }}
+                  />
+                </Col>
+              </Row>
+
+              <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
+                <Col xs={24} lg={12}>
+                  <Card
+                    size="small"
+                    title="GPU VRAM Split"
+                    variant="borderless"
+                    style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+                  >
+                    {gpu?.available && gpuChartData.length ? (
+                      <>
+                        <ResponsiveContainer width="100%" height={180}>
+                          <BarChart data={gpuChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={token.colorBorderSecondary} />
+                            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(Number(v) / 1024).toFixed(1)}G`} />
+                            <RTooltip formatter={(value) => fmtBytes(Number(value) * 1024 ** 2)} />
+                            <Bar dataKey="mib" radius={[3, 3, 0, 0]}>
+                              {gpuChartData.map((entry) => (
+                                <Cell key={entry.name} fill={entry.color} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          Total GPU use: {fmtBytes((gpu.used_mib ?? 0) * 1024 ** 2)} / {fmtBytes((gpu.total_mib ?? 0) * 1024 ** 2)}
+                        </Text>
+                      </>
+                    ) : (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="GPU process memory unavailable"
+                        description={gpu?.reason || 'nvidia-smi did not return process-level memory.'}
+                      />
+                    )}
+                  </Card>
+                </Col>
+
+                <Col xs={24} lg={12}>
+                  <Card
+                    size="small"
+                    title="Embedding Latency"
+                    variant="borderless"
+                    style={{ border: `1px solid ${token.colorBorderSecondary}` }}
+                  >
+                    <ResponsiveContainer width="100%" height={180}>
+                      <BarChart data={embeddingLatencyData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={token.colorBorderSecondary} />
+                        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => fmtMs(Number(v))} />
+                        <RTooltip formatter={(value) => fmtMs(Number(value))} />
+                        <Bar dataKey="ms" radius={[3, 3, 0, 0]}>
+                          {embeddingLatencyData.map((entry) => (
+                            <Cell key={entry.name} fill={entry.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      Avg batch: {embeddingsLive.avg_batch_size?.toFixed(1) ?? '—'} requests, {embeddingsLive.avg_batch_tokens?.toFixed(1) ?? '—'} tokens
+                    </Text>
+                  </Card>
+                </Col>
+              </Row>
+            </>
           )}
         </Card>
 

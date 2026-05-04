@@ -7,6 +7,7 @@ SSE streaming endpoints return a Flask Response object directly.
 """
 import json
 import re
+import subprocess
 import urllib.request
 import urllib.parse
 import uuid
@@ -120,6 +121,151 @@ def llm_live_handler(app, operation, request, **kwargs):
     except Exception as e:
         logger.error(f"[api] Failed to fetch LLM live metrics: {e}")
         return {"error": str(e)}, 500
+
+
+def _prom_value(metrics: str, name: str, labels: str | None = None) -> float | None:
+    """Return the first numeric Prometheus value matching ``name``."""
+    label_pattern = r"(?:\{[^}]*\})?" if labels is None else r"\{" + labels + r"\}"
+    m = re.search(
+        rf"^{re.escape(name)}{label_pattern}\s+([0-9eE.+\-]+)\s*$",
+        metrics,
+        re.MULTILINE,
+    )
+    return float(m.group(1)) if m else None
+
+
+def _prom_hist_avg(metrics: str, name: str) -> float | None:
+    """Average seconds from a Prometheus histogram's ``_sum`` / ``_count``."""
+    total = _prom_value(metrics, f"{name}_sum")
+    count = _prom_value(metrics, f"{name}_count")
+    if total is None or not count:
+        return None
+    return total / count
+
+
+def _gpu_process_memory() -> dict:
+    """Best-effort NVIDIA VRAM split for local vLLM and TEI processes."""
+    try:
+        gpu = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total,memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            timeout=3,
+        ).strip().splitlines()[0]
+        total_mib, used_mib = [int(part.strip()) for part in gpu.split(",", 1)]
+
+        apps = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,process_name,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            timeout=3,
+        ).strip().splitlines()
+    except Exception as e:
+        return {"available": False, "reason": str(e)}
+
+    processes = []
+    embeddings_mib = 0
+    llm_mib = 0
+    for line in apps:
+        if not line.strip():
+            continue
+        parts = [part.strip() for part in line.split(",", 2)]
+        if len(parts) != 3:
+            continue
+        pid, name, mem = parts
+        try:
+            used = int(mem)
+        except ValueError:
+            continue
+        lower = name.lower()
+        role = "other"
+        if "text-embeddings" in lower or "text_embeddings" in lower:
+            role = "embeddings"
+            embeddings_mib += used
+        elif "vllm" in lower:
+            role = "llm"
+            llm_mib += used
+        processes.append({"pid": int(pid), "name": name, "used_mib": used, "role": role})
+
+    return {
+        "available": True,
+        "total_mib": total_mib,
+        "used_mib": used_mib,
+        "embeddings_mib": embeddings_mib,
+        "llm_mib": llm_mib,
+        "other_mib": max(0, used_mib - embeddings_mib - llm_mib),
+        "processes": processes,
+    }
+
+
+def embeddings_live_handler(app, operation, request, **kwargs):
+    """GET /v1/embeddings/live — TEI runtime metrics for the overview page."""
+    base = Config.EMBED_BASE_URL
+    if not base:
+        return {
+            "available": False,
+            "reason": "EMBED_BASE_URL is not configured; using in-process fastembed fallback.",
+            "backend": "fastembed",
+            "model": Config.EMBED_MODEL,
+        }, 200
+
+    try:
+        with urllib.request.urlopen(f"{base}/info", timeout=5) as resp:
+            info = json.loads(resp.read().decode("utf-8"))
+        with urllib.request.urlopen(f"{base}/metrics", timeout=5) as resp:
+            metrics = resp.read().decode("utf-8")
+    except Exception as e:
+        logger.error(f"[api] Failed to fetch embeddings metrics: {e}")
+        return {"available": False, "backend": "tei", "reason": str(e)}, 200
+
+    request_count = _prom_value(metrics, "te_request_count", r'method="batch"')
+    success_count = _prom_value(metrics, "te_request_success", r'method="batch"')
+    embed_count = _prom_value(metrics, "te_embed_count")
+    queue_size = _prom_value(metrics, "te_queue_size")
+    avg_request_s = _prom_hist_avg(metrics, "te_request_duration")
+    avg_inference_s = _prom_hist_avg(metrics, "te_embed_inference_duration")
+    avg_queue_s = _prom_hist_avg(metrics, "te_request_queue_duration")
+    avg_tokenization_s = _prom_hist_avg(metrics, "te_request_tokenization_duration")
+    input_tokens = _prom_value(metrics, "te_request_input_length_sum")
+    input_count = _prom_value(metrics, "te_request_input_length_count")
+    batch_tokens = _prom_value(metrics, "te_batch_next_tokens_sum")
+    batch_count = _prom_value(metrics, "te_batch_next_tokens_count")
+    batch_size_sum = _prom_value(metrics, "te_batch_next_size_sum")
+    batch_size_count = _prom_value(metrics, "te_batch_next_size_count")
+
+    return {
+        "available": True,
+        "backend": "tei",
+        "base_url": base,
+        "model": info.get("model_id", Config.EMBED_MODEL),
+        "model_dtype": info.get("model_dtype"),
+        "pooling": (info.get("model_type", {}).get("embedding", {}) or {}).get("pooling"),
+        "max_input_length": info.get("max_input_length"),
+        "max_batch_tokens": info.get("max_batch_tokens"),
+        "max_client_batch_size": info.get("max_client_batch_size"),
+        "max_concurrent_requests": info.get("max_concurrent_requests"),
+        "tokenization_workers": info.get("tokenization_workers"),
+        "version": info.get("version"),
+        "request_count": int(request_count) if request_count is not None else None,
+        "success_count": int(success_count) if success_count is not None else None,
+        "embed_count": int(embed_count) if embed_count is not None else None,
+        "embedded_records_total": int(embed_count) if embed_count is not None else None,
+        "queue_size": int(queue_size) if queue_size is not None else None,
+        "avg_request_ms": avg_request_s * 1000 if avg_request_s is not None else None,
+        "avg_inference_ms": avg_inference_s * 1000 if avg_inference_s is not None else None,
+        "avg_queue_ms": avg_queue_s * 1000 if avg_queue_s is not None else None,
+        "avg_tokenization_ms": avg_tokenization_s * 1000 if avg_tokenization_s is not None else None,
+        "avg_input_tokens": input_tokens / input_count if input_tokens is not None and input_count else None,
+        "avg_batch_tokens": batch_tokens / batch_count if batch_tokens is not None and batch_count else None,
+        "avg_batch_size": batch_size_sum / batch_size_count if batch_size_sum is not None and batch_size_count else None,
+        "gpu": _gpu_process_memory(),
+    }, 200
 
 
 # ── Chat helpers ───────────────────────────────────────────────────────────────

@@ -78,11 +78,12 @@ class Config:
     # Hard cap for per-document enrichment (full-text, single doc at a time).
     INSIGHTS_MAX_DOCS_FULL_TEXT = int(os.getenv("INSIGHTS_MAX_DOCS_FULL_TEXT", "40"))
 
-    # ── Embeddings (fastembed / bge-m3, CPU-only) ─────────────────────────────────
-    EMBED_MODEL      = os.getenv("EMBED_MODEL",      "BAAI/bge-large-en-v1.5")
+    # ── Embeddings (TEI GPU / fastembed CPU fallback) ─────────────────────────
+    EMBED_MODEL      = os.getenv("EMBED_MODEL",      "BAAI/bge-m3")
     EMBED_CACHE_DIR  = os.getenv("EMBED_CACHE_DIR",  "./data/embed_cache")
     EMBED_DIMS       = int(os.getenv("EMBED_DIMS",   "1024"))
     EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
+    EMBED_TEXT_TRUNCATE_CHARS = int(os.getenv("EMBED_TEXT_TRUNCATE_CHARS", "32000"))
     # When set, the EmbeddingClient POSTs to a TEI GPU server (HTTP). Leave
     # empty to fall back to the in-process CPU fastembed path — useful for
     # tests, offline dev, or boxes without an embedding service.
