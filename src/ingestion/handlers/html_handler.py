@@ -64,7 +64,8 @@ class HtmlHandler:
             except OSError:
                 opts["encoding"] = _FALLBACK_ENCODING
         # "article" prefers <article>/<main>; "paragraph" splits the body
-        # into <p>-level records.
+        # into <p>-level records. "full_text" uses the whole page body as
+        # one record, ignoring article/main narrowing.
         opts.setdefault("chunking", "article")
         # Default 0 → keep every paragraph/article body. Empty/whitespace
         # nodes are still dropped because they contribute nothing.
@@ -154,10 +155,13 @@ class HtmlHandler:
         min_chars = opts.get("min_chars", 0)
 
         # Locate the content root.
-        root = (soup.find("article")
-                or soup.find("main")
-                or soup.body
-                or soup)
+        if chunking == "full_text":
+            root = soup.body or soup
+        else:
+            root = (soup.find("article")
+                    or soup.find("main")
+                    or soup.body
+                    or soup)
 
         if chunking == "paragraph":
             # One record per <p> / <li> / <h*> with non-empty text.
@@ -179,14 +183,15 @@ class HtmlHandler:
                 if limit is not None and emitted >= limit:
                     return
         else:
-            # ``article`` mode: one record carrying the full body text.
+            # ``article``/``full_text`` mode: one record carrying the selected
+            # body text.
             text = root.get_text(separator="\n", strip=True)
             if text and len(text) >= min_chars:
                 yield RawRecord(
                     text=text,
                     title=page_title,
                     url=canonical,
-                    raw={"page_title": page_title, "canonical": canonical},
+                    raw={"page_title": page_title, "canonical": canonical, "mode": chunking},
                     record_index=0,
                 )
 
@@ -194,7 +199,7 @@ class HtmlHandler:
 
     def estimate_records(self, path: Path, options: dict) -> Optional[int]:
         opts = self._resolve_options(path, options)
-        return 1 if opts.get("chunking") == "article" else None
+        return 1 if opts.get("chunking") in ("article", "full_text") else None
 
 
 register(HtmlHandler())

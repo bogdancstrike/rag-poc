@@ -8,7 +8,7 @@ Three operating modes, picked at ``propose_mapping`` time:
   - ``paragraph``   — split on blank-line runs. Default for prose / markdown.
   - ``line``        — each non-empty line is one record. Use for short logs
                       or messages where blank lines are rare.
-  - ``whole_text``  — emit the complete file as one record. Useful when a text
+  - ``full_text``   — emit the complete file as one record. Useful when a text
                       document should stay intact for review/search.
 
 The inferred pattern is stored in the parser profile, so re-uploading the
@@ -220,8 +220,8 @@ class TextHandler:
             yield from self._iter_regex(path, opts, limit)
         elif mode == "line":
             yield from self._iter_line(path, opts, limit)
-        elif mode == "whole_text":
-            yield from self._iter_whole_text(path, opts, limit)
+        elif mode in ("full_text", "whole_text"):
+            yield from self._iter_full_text(path, opts, limit)
         else:
             yield from self._iter_paragraph(path, opts, limit)
 
@@ -327,8 +327,8 @@ class TextHandler:
                 if len(para) >= min_chars:
                     yield RawRecord(text=para, raw={"paragraph": para}, record_index=idx)
 
-    def _iter_whole_text(self, path: Path, opts: dict,
-                         limit: Optional[int]) -> Iterator[RawRecord]:
+    def _iter_full_text(self, path: Path, opts: dict,
+                        limit: Optional[int]) -> Iterator[RawRecord]:
         if limit is not None and limit <= 0:
             return
         min_chars = opts.get("min_chars", 0)
@@ -338,7 +338,7 @@ class TextHandler:
             return
         if len(text) < min_chars:
             return
-        yield RawRecord(text=text, raw={"text": text, "mode": "whole_text"}, record_index=0)
+        yield RawRecord(text=text, raw={"text": text, "mode": "full_text"}, record_index=0)
 
     # ── Extract (pipeline-facing) ──────────────────────────────────────────
 
@@ -360,7 +360,7 @@ class TextHandler:
         try:
             opts = self._resolve_options(path, options)
             opts = self._infer_mode(path, opts)
-            if opts.get("mode") == "whole_text":
+            if opts.get("mode") in ("full_text", "whole_text"):
                 return 1
             count = 0
             with path.open("rb") as f:

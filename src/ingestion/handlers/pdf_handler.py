@@ -8,6 +8,7 @@ Two chunking modes:
   - ``page``       — one record per PDF page (default; sensible for reports).
   - ``paragraph``  — split each page on blank-line runs; finer-grained for
                       retrieval but more records per file.
+  - ``full_text``  — one record containing all extractable text in the PDF.
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ class PdfHandler:
         # produce empty extracts and skip *organically* via the
         # ``not text`` early-return in ``_iter_records``.
         opts = dict(options or {})
-        opts.setdefault("chunking", "page")     # "page" | "paragraph"
+        opts.setdefault("chunking", "page")     # "page" | "paragraph" | "full_text"
         opts.setdefault("min_chars", 0)
         return opts
 
@@ -138,6 +139,26 @@ class PdfHandler:
         except Exception:
             title_meta = None
 
+        if chunking == "full_text":
+            page_texts: list[str] = []
+            for page_no, page in enumerate(reader.pages, start=1):
+                try:
+                    text = (page.extract_text() or "").strip()
+                except Exception as e:
+                    logger.warning(f"[pdf] page {page_no} extract failed: {e}")
+                    text = ""
+                if text:
+                    page_texts.append(text)
+            text = "\n\n".join(page_texts).strip()
+            if text and len(text) >= min_chars and (limit is None or limit > 0):
+                yield RawRecord(
+                    text=text,
+                    title=str(title_meta) if title_meta else None,
+                    raw={"mode": "full_text", "pages": len(reader.pages)},
+                    record_index=0,
+                )
+            return
+
         for page_no, page in enumerate(reader.pages, start=1):
             try:
                 text = page.extract_text() or ""
@@ -185,6 +206,8 @@ class PdfHandler:
             reader = PdfReader(str(path))
             n = len(reader.pages)
             opts = self._resolve_options(path, options)
+            if opts["chunking"] == "full_text":
+                return 1
             # Paragraph mode is hard to estimate without scanning — return
             # page count as a lower bound (over-restrictive but honest).
             return n if opts["chunking"] == "page" else None

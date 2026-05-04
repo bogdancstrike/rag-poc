@@ -23,7 +23,7 @@ interface Props {
  *
  * Two distinct UIs depending on the handler family:
  *   - Tabular  (csv/jsonl/xlsx)  → column→field selects + sample preview
- *   - Text/log                    → mode dropdown + optional regex
+ *   - Text-like (txt/pdf/docx/html) → mode dropdown + optional regex
  */
 export function MappingReviewDrawer({ upload, open, onClose, investigationId }: Props) {
   const { token } = theme.useToken()
@@ -46,7 +46,38 @@ export function MappingReviewDrawer({ upload, open, onClose, investigationId }: 
 
   if (!upload || !proposed) return null
 
-  const isTextLike = upload.handler_name === 'text'
+  const isTextLike = ['text', 'pdf', 'docx', 'html'].includes(upload.handler_name)
+  const modeKey: keyof UploadMapping = upload.handler_name === 'text' ? 'mode' : 'chunking'
+  const currentMode = (mapping[modeKey] as string | undefined) || (
+    upload.handler_name === 'pdf' ? 'page'
+      : upload.handler_name === 'html' ? 'article'
+        : upload.handler_name === 'docx' ? 'paragraph'
+          : 'paragraph'
+  )
+  const modeOptions = upload.handler_name === 'pdf'
+    ? [
+        { label: 'Full-text (one record for the entire file)', value: 'full_text' },
+        { label: 'Page (one record per page)', value: 'page' },
+        { label: 'Paragraph (split pages on blank lines)', value: 'paragraph' },
+      ]
+    : upload.handler_name === 'docx'
+      ? [
+          { label: 'Full-text (one record for the entire file)', value: 'full_text' },
+          { label: 'Paragraph (one record per paragraph)', value: 'paragraph' },
+          { label: 'Section (group paragraphs under headings)', value: 'section' },
+        ]
+      : upload.handler_name === 'html'
+        ? [
+            { label: 'Full-text (one record for the whole page body)', value: 'full_text' },
+            { label: 'Article (prefer article/main content)', value: 'article' },
+            { label: 'Paragraph (one record per paragraph/list/header)', value: 'paragraph' },
+          ]
+        : [
+            { label: 'Full-text (one record for the entire file)', value: 'full_text' },
+            { label: 'Regex (one record per matching line)', value: 'regex' },
+            { label: 'Paragraph (split on blank lines)', value: 'paragraph' },
+            { label: 'Line (one record per non-empty line)', value: 'line' },
+          ]
 
   const handleConfirm = async () => {
     await confirmMutation.mutateAsync({
@@ -94,7 +125,7 @@ export function MappingReviewDrawer({ upload, open, onClose, investigationId }: 
   // Cancel must always work; Confirm requires a text-column for tabular
   // handlers (CSV/JSONL/XLSX) or a parse mode for the text handler.
   const canConfirm = isTextLike
-    ? !!(mapping.mode)
+    ? !!(mapping[modeKey])
     : !!(mapping.text)
 
   return (
@@ -170,17 +201,12 @@ export function MappingReviewDrawer({ upload, open, onClose, investigationId }: 
             <Form.Item label="Mode">
               <Select
                 size="small"
-                value={mapping.mode || 'paragraph'}
-                onChange={(v) => setMapping((m) => ({ ...m, mode: v as any }))}
-                options={[
-                  { label: 'Whole text (one record for the entire file)', value: 'whole_text' },
-                  { label: 'Regex (one record per matching line)', value: 'regex' },
-                  { label: 'Paragraph (split on blank lines)', value: 'paragraph' },
-                  { label: 'Line (one record per non-empty line)', value: 'line' },
-                ]}
+                value={currentMode}
+                onChange={(v) => setMapping((m) => ({ ...m, [modeKey]: v as any }))}
+                options={modeOptions}
               />
             </Form.Item>
-            {mapping.mode === 'regex' && (
+            {upload.handler_name === 'text' && currentMode === 'regex' && (
               <Form.Item label="Regex pattern (named groups: text, created_at, author)">
                 <Input.TextArea
                   rows={3}

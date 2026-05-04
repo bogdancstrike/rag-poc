@@ -47,7 +47,8 @@ class DocxHandler:
         opts = dict(options or {})
         # "paragraph" yields one record per paragraph (default — fine-grained
         # for retrieval). "section" groups paragraphs under each heading
-        # into a single record (better for short docs).
+        # into a single record (better for short docs). "full_text" keeps the
+        # whole document as one record.
         opts.setdefault("chunking", "paragraph")
         # Default 0 → no silent drops. Empty paragraphs are still skipped
         # because they carry no information after strip().
@@ -116,6 +117,19 @@ class DocxHandler:
 
         chunking  = opts.get("chunking", "paragraph")
         min_chars = opts.get("min_chars", 0)
+        if chunking == "full_text":
+            chunks = [(para.text or "").strip() for para in doc.paragraphs]
+            text = "\n".join(c for c in chunks if c).strip()
+            if text and len(text) >= min_chars and (limit is None or limit > 0):
+                title = next((c for c in chunks if c), None)
+                yield RawRecord(
+                    text=text,
+                    title=title,
+                    raw={"mode": "full_text", "paragraph_count": len(chunks)},
+                    record_index=0,
+                )
+            return
+
         current_heading: Optional[str] = None
         section_buf: list[str] = []
         idx       = 0
@@ -188,6 +202,9 @@ class DocxHandler:
         try:
             from docx import Document
             doc = Document(str(path))
+            opts = self._resolve_options(path, options)
+            if opts.get("chunking") == "full_text":
+                return 1
             return len(doc.paragraphs)
         except Exception:
             return None
