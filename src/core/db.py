@@ -60,6 +60,7 @@ def init_db():
     import src.insights.models      # noqa: F401 – InsightsCache
     import src.enrichment.models    # noqa: F401 – DocumentEnrichment
     import src.investigations.models  # noqa: F401 – Investigation, SavedSearch, etc.
+    import src.ingestion.models       # noqa: F401 – UploadedFile, ParserProfile
 
     engine = get_engine()
     from sqlalchemy import inspect

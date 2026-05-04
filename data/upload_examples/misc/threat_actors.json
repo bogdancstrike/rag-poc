@@ -1,0 +1,62 @@
+[
+  {
+    "actor_id": "TA-0017",
+    "name": "Shadow Cipher",
+    "aliases": ["SC-Group", "APT-Unknown-EU-04"],
+    "first_observed": "2022-03-14",
+    "primary_targets": ["energy sector", "telecommunications"],
+    "regions": ["EU", "Eastern Europe"],
+    "ttps_summary": "Initial access via spear-phishing with macro-laden Office documents. Lateral movement using PsExec and WMI. Exfiltration via cloud storage abuse (typically MEGA and Backblaze B2).",
+    "associated_iocs": {
+      "domains": ["ciphered-news.net", "stratcom-update.net"],
+      "ip_ranges": ["185.234.218.0/24"],
+      "hashes": ["a3f8b12c9d4e7a8f3b5c1d9e2a4f8b7c"]
+    },
+    "confidence": "moderate"
+  },
+  {
+    "actor_id": "TA-0018",
+    "name": "Echo Bear",
+    "aliases": ["EchoBear", "Ursus-Echo"],
+    "first_observed": "2021-08-22",
+    "primary_targets": ["government", "defense contractors"],
+    "regions": ["NATO members"],
+    "ttps_summary": "Long-dwell-time intrusions, often 8-14 months before exfiltration. Heavy use of living-off-the-land binaries. Custom backdoor 'EchoCall' using DNS tunneling for C2.",
+    "associated_iocs": {
+      "domains": ["dns-resolver-eu.org", "time-sync-3.net"],
+      "ip_ranges": [],
+      "hashes": ["b9c4d2e8f1a5b3c7d8e2f4a1b6c9d3e5", "f2a8c4b6d9e1f3a5b7c9d2e4f6a8b1c3"]
+    },
+    "confidence": "high"
+  },
+  {
+    "actor_id": "TA-0019",
+    "name": "Glass Hornet",
+    "aliases": ["GH-Cluster"],
+    "first_observed": "2023-11-02",
+    "primary_targets": ["financial services", "cryptocurrency exchanges"],
+    "regions": ["Global"],
+    "ttps_summary": "Supply-chain compromise of npm packages. Targeted developer machines. Ransomware deployment as final stage in ~30% of incidents; pure exfiltration in the remainder.",
+    "associated_iocs": {
+      "domains": ["npm-registry-mirror.io"],
+      "ip_ranges": ["91.245.77.0/26"],
+      "hashes": ["c8d3e5f9a2b4c6d8e1f3a5b7c9d2e4f6"]
+    },
+    "confidence": "high"
+  },
+  {
+    "actor_id": "TA-0020",
+    "name": "Velvet Mantis",
+    "aliases": [],
+    "first_observed": "2024-01-30",
+    "primary_targets": ["NGOs", "journalists", "human-rights organizations"],
+    "regions": ["Middle East", "Central Asia"],
+    "ttps_summary": "Mobile-first targeting. Pegasus-class spyware delivered via zero-click iMessage exploits (now patched) and one-click links via WhatsApp. Highly targeted, low-volume campaigns.",
+    "associated_iocs": {
+      "domains": [],
+      "ip_ranges": [],
+      "hashes": []
+    },
+    "confidence": "moderate"
+  }
+]

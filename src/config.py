@@ -110,6 +110,24 @@ class Config:
     REDIS_CONNECT_TIMEOUT = os.getenv("REDIS_CONNECT_TIMEOUT", "5.0")
     REDIS_RETRY_ON_TIMEOUT= os.getenv("REDIS_RETRY_ON_TIMEOUT", "true")
 
+    # ── File ingestion (user-uploaded files into investigations) ──────────────
+    # Root directory for original-file storage. Each upload lives at
+    # ${UPLOADS_DIR}/<investigation_id>/<file_id>/{original.<ext>, meta.json}.
+    UPLOADS_DIR             = os.getenv("UPLOADS_DIR", "./data/uploads")
+    # Hard cap per file. 0 = unlimited (the OS / disk imposes the real ceiling).
+    UPLOADS_MAX_SIZE_BYTES  = int(os.getenv("UPLOADS_MAX_SIZE_BYTES", str(5 * 1024 * 1024 * 1024)))
+    # ES bulk-index batch size during streaming ingestion.
+    INGEST_BATCH_SIZE       = int(os.getenv("INGEST_BATCH_SIZE", "500"))
+    # Per-record character cap for the ES `text` field. Prevents one huge cell
+    # from blowing up indexing or downstream LLM enrichment.
+    INGEST_TEXT_TRUNCATE    = int(os.getenv("INGEST_TEXT_TRUNCATE", "20000"))
+    # Number of sample records sent to the LLM for column→field mapping inference.
+    INGEST_SAMPLE_RECORDS   = int(os.getenv("INGEST_SAMPLE_RECORDS", "5"))
+    # Anti-zip-bomb caps (Phase 3 archive handler — reserved here so they're
+    # discoverable even though the handler ships later).
+    INGEST_ARCHIVE_MAX_DEPTH       = int(os.getenv("INGEST_ARCHIVE_MAX_DEPTH", "2"))
+    INGEST_ARCHIVE_EXPANSION_RATIO = int(os.getenv("INGEST_ARCHIVE_EXPANSION_RATIO", "20"))
+
     # ── Tracing ────────────────────────────────────────────────────────────────
     ENABLE_TRACING = os.getenv("ENABLE_TRACING", "false").lower() in ("1", "true", "yes")
     OTLP_ENDPOINT  = os.getenv("QSINT_OTLP_ENDPOINT", "http://localhost:4317")

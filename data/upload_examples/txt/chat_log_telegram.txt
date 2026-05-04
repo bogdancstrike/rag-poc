@@ -1,0 +1,12 @@
+[2024-05-12 18:42:01] @nightowl: anyone else getting 502s on the staging deploy?
+[2024-05-12 18:42:34] @marina_p: yeah, started about 10 min ago. ingress looks healthy though
+[2024-05-12 18:43:12] @nightowl: switched to the canary cluster, same problem
+[2024-05-12 18:44:55] @ops_dan: looking. seeing memory pressure on the auth pods
+[2024-05-12 18:46:20] @marina_p: rolling back the 14:00 deploy as a precaution
+[2024-05-12 18:48:01] @ops_dan: confirmed - the new caching layer is leaking goroutines. ~12k goroutines per pod, climbing
+[2024-05-12 18:49:33] @nightowl: rollback in progress. ETA 4 min
+[2024-05-12 18:53:18] @marina_p: services back to nominal. 502s gone
+[2024-05-12 18:53:55] @ops_dan: incident over. writing post-mortem. lessons: a) cachelayer test coverage missed the leak path because we never hit the eviction code in tests; b) we don't alert on goroutine count, only on memory — should add
+[2024-05-12 19:01:42] @nightowl: ack. opening tickets for both
+[2024-05-12 21:14:07] @kris_q: late to this, but for the post-mortem — was anything customer-facing? need to know for the comms note
+[2024-05-12 21:15:23] @marina_p: 11 minutes of 502s on staging only. no customer impact. status page wasn't updated.

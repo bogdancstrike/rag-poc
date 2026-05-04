@@ -1,0 +1,47 @@
+INCIDENT REPORT — Operation NIGHTSHADE
+Date prepared: 2024-06-08
+Classification: Confidential — internal distribution only
+
+Executive summary
+
+On the evening of 2024-06-04, between approximately 22:15 and 03:40 local time,
+unauthorized access was observed against the perimeter of the southern logistics
+depot. No physical breach of the secure storage area was confirmed, but several
+secondary indicators (disturbed gravel patterns near the eastern fence line,
+cut zip-tie remnants on the perimeter sensor, and a 27-minute gap in the
+camera-3 recording attributable to a deliberate IR-saturation event) suggest
+a coordinated probing attempt rather than opportunistic trespass.
+
+Timeline
+
+22:15 — Camera 3 (eastern fence) registers an IR anomaly consistent with
+        a high-output IR floodlight pointed directly at the lens. Recording
+        becomes unusable for 27 minutes.
+22:42 — Camera 3 returns to normal exposure. Two figures briefly visible
+        moving south-to-north along the fence line.
+23:18 — Perimeter sensor 7 (eastern, mid-fence) registers a tamper event.
+        Patrol dispatched; sensor found with the housing removed but
+        functional. No further activity recorded for 4 hours 22 minutes.
+03:40 — Camera 7 (north access road) records a vehicle (dark-colored panel
+        van, partial plate visible: ending in -47-) departing the area
+        at speed.
+
+Assessment
+
+The pattern — synchronized camera obstruction, sensor tampering during the
+obstruction window, prolonged dwell time, and timed exfiltration — is
+inconsistent with vandalism or theft of opportunity. We assess with moderate
+confidence that this was a reconnaissance operation conducted by a trained
+team. The targeted nature of the IR saturation (camera 3 specifically, which
+has the widest field of view of any single sensor) suggests the actors had
+prior knowledge of the camera layout.
+
+Recommendations
+
+1. Increase patrol frequency on the eastern perimeter to 30-min intervals
+   for the next 14 nights.
+2. Deploy two additional thermal cameras to overlap camera-3 coverage.
+3. Cross-reference the partial plate -47- against vehicles observed near
+   other facilities in the past 60 days.
+4. Brief the regional task force; this is the third probable reconnaissance
+   incident in the area in the past 90 days.

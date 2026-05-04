@@ -1,0 +1,30 @@
+Random notes from the USB drive — unsorted, dates approximate.
+
+Mar — meeting with K. He's still nervous about the routing through Larnaca.
+Said the auditor flagged two of the December transfers and is asking for
+the underlying invoices. We do have invoices but they're back-dated. Need
+to think about whether to just provide them and hope, or get ahead of it.
+
+Apr 2 — call with the Geneva office. They want to move 1.4 to the Singapore
+side before end of quarter. I asked about the 50% threshold rule and they
+said "we have a way around it" which I do not love as an answer.
+
+Apr 14 — found the laptop in the safe. Old one. Battery dead. Charger is
+the cylindrical one not USB-C. Try to find it or just clone the drive.
+
+May — wedding. Had to leave early because of the call from H. He says the
+account in Vaduz was frozen on Tuesday morning, no notice, no explanation.
+Bank just said "compliance hold". This is the third one this year. Pattern?
+
+Jun 1 — passwords (move these to the manager when I get home, do NOT leave
+in this file):
+  - mail: kP9!nQ4&zRfX2
+  - vault A: see paper note in left desk drawer
+  - vault B: same as vault A but reversed last 4 chars
+
+Jun 11 — note to self: never write passwords in a notes file.
+
+Jun 22 — flight delayed 5h. Thinking about the structure question. If we
+move the holding entity to Liechtenstein the reporting is simpler but
+the optics are bad. If we keep it in Cyprus the reporting is hell but
+nobody asks questions. M says go with optics, I'm not sure.
