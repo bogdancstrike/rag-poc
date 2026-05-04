@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Quarterly Threat Brief — Q3 2024</title>
+  <link rel="canonical" href="https://example.com/briefs/q3-2024">
+  <style>body { font-family: sans-serif; }</style>
+  <script>console.log("ignored")</script>
+</head>
+<body>
+  <header><nav>top nav — should be ignored in article mode</nav></header>
+  <article>
+    <h1>Quarterly Threat Brief — Q3 2024</h1>
+    <p>This brief summarises the most significant threat-actor activity
+       observed by our team during Q3 2024. Three notable campaigns are
+       described below, with primary indicators and recommended mitigations.</p>
+    <h2>1. Echo Bear infrastructure refresh</h2>
+    <p>Through the quarter, the Echo Bear cluster registered 14 new C2
+       domains across two registrars. Domain naming patterns reuse the
+       <code>time-sync-*</code> and <code>dns-*</code> prefixes seen in
+       prior campaigns.</p>
+    <p>Recommended action: block at perimeter; share IOCs with sector ISACs.</p>
+    <h2>2. Glass Hornet npm supply chain</h2>
+    <p>An npm registry mirror that was active for 6 days in early August
+       served compromised <code>@org/utils</code> packages. Approximately
+       180 organisations are believed to have pulled the affected versions
+       during the window. We are tracking 11 confirmed downstream incidents.</p>
+    <h2>3. Maritime AIS dark events</h2>
+    <p>AIS dark events in the eastern Mediterranean increased 40% quarter
+       over quarter. Three vessels account for the majority of activity.
+       The pattern is consistent with sanctions-evasion logistics rather
+       than navigational anomaly.</p>
+    <h2>Summary</h2>
+    <p>Detection-side priorities for Q4: refresh Echo Bear hunting rules,
+       complete the Glass Hornet retro-hunt across customer environments,
+       and coordinate with maritime partners on the AIS findings.</p>
+  </article>
+  <footer>© 2024 Example Corp</footer>
+</body>
+</html>
