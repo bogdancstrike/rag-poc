@@ -1,4 +1,4 @@
-# QSINT RAG — Intelligence Platform
+# QRAG — Intelligence & Analytics Platform
 
 A production-grade **Retrieval-Augmented Generation (RAG)** platform for OSINT and intelligence analysis. Combines multi-index Elasticsearch document storage, a local GPU-accelerated LLM, streaming AI enrichment, and a full-featured React SPA for analysts to explore data, generate intelligence reports, track tasks, and chat with corpora in real time.
 
